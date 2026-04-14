@@ -1,0 +1,376 @@
+{% extends "base.html" %}
+{% block title %}RockIA — Prédictions football{% endblock %}
+
+{% block content %}
+
+{% if tab == 'matches' %}
+{# ═══════════════════════════════════════════ MATCHS ═══════════════════════════════════════════ #}
+
+<div class="page-header">
+  <div class="page-title">Matchs à venir</div>
+  <div class="page-sub">Prédictions XGBoost + Dixon-Coles en temps réel · {{ n_upcoming }} matchs · {{ n_leagues }} compétitions</div>
+</div>
+
+<div class="metric-strip">
+  <div class="metric-card">
+    <div class="metric-label">Matchs affichés</div>
+    <div class="metric-val">{{ n_upcoming }}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Value bets</div>
+    <div class="metric-val">{{ n_value }}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Compétitions</div>
+    <div class="metric-val">{{ n_leagues }}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Matchs entraînement</div>
+    <div class="metric-val">{{ "{:,}".format(n_matches_train) }}</div>
+  </div>
+</div>
+
+{% if sorted_days %}
+<div class="toolbar">
+  <div class="day-tabs">
+    {% for day in sorted_days %}
+    <a href="/?tab=matches&day={{ day }}&value={{ '1' if only_value else '0' }}"
+       class="day-tab {% if day == selected_day %}active{% endif %}">
+      {{ day_labels[day] }}
+    </a>
+    {% endfor %}
+  </div>
+  <div class="toolbar-right">
+    <span class="toggle-wrap">
+      <a href="/?tab=matches&day={{ selected_day }}&value={{ '0' if only_value else '1' }}" style="display:contents">
+        <button class="toggle {% if only_value %}on{% endif %}" type="button"></button>
+      </a>
+      Value bets uniquement
+    </span>
+  </div>
+</div>
+
+{% if selected_day and by_day[selected_day] %}
+  {% set day_matches = by_day[selected_day] | sort(attribute='_dt') %}
+  {% set n_val_day = namespace(count=0) %}
+  {% for m in day_matches %}
+    {% if predictions[m.id] and predictions[m.id].best_bet %}
+      {% set n_val_day.count = n_val_day.count + 1 %}
+    {% endif %}
+  {% endfor %}
+
+  {% if n_val_day.count > 0 %}
+  <div class="value-count-badge">
+    <div class="value-dot"></div>
+    {{ n_val_day.count }} value bet{{ 's' if n_val_day.count > 1 else '' }} détecté{{ 's' if n_val_day.count > 1 else '' }}
+  </div>
+  {% endif %}
+
+  {% set by_league_day = {} %}
+  {% for m in day_matches %}
+    {% if m.league_code not in by_league_day %}
+      {% set _ = by_league_day.update({m.league_code: []}) %}
+    {% endif %}
+    {% set _ = by_league_day[m.league_code].append(m) %}
+  {% endfor %}
+
+  {% for lcode in league_order %}
+    {% if lcode in by_league_day %}
+      {% set comp = competitions[lcode] %}
+      {% set lmatches = by_league_day[lcode] %}
+
+      {% set has_visible = namespace(val=false) %}
+      {% for m in lmatches %}
+        {% set pred = predictions[m.id] %}
+        {% if not only_value or (pred and pred.best_bet) %}
+          {% set has_visible.val = true %}
+        {% endif %}
+      {% endfor %}
+
+      {% if has_visible.val %}
+      <div class="league-group">
+        <div class="league-header">
+          <div class="league-badge" style="background:{{ comp.bg }};border:1px solid {{ comp.color }}44;color:{{ comp.color }}">
+            {{ comp.short }}
+          </div>
+          <div>
+            <div class="league-name">{{ comp.name }}</div>
+            <div class="league-count">{{ lmatches|length }} match{{ 'es' if lmatches|length > 1 else '' }}</div>
+          </div>
+        </div>
+        <div class="league-matches">
+          {% for m in lmatches %}
+            {% set pred = predictions[m.id] %}
+            {% if not only_value or (pred and pred.best_bet) %}
+              {% if pred %}
+              <a href="/match/{{ m.id }}" class="match-row">
+                <div class="match-time">{{ m._dt.strftime('%H:%M') }}</div>
+                <div class="match-teams">
+                  <div class="match-name">{{ m.home_team }} vs {{ m.away_team }}</div>
+                  {% if pred.best_bet %}
+                  <div class="match-meta">Value bet détecté</div>
+                  {% endif %}
+                </div>
+                <div class="match-odds">
+                  <div class="odd-pill">{{ "%.2f"|format(m.odds_H) }}</div>
+                  <div class="odd-pill">{{ "%.2f"|format(m.odds_D) }}</div>
+                  <div class="odd-pill">{{ "%.2f"|format(m.odds_A) }}</div>
+                </div>
+                {% if pred.best_bet %}
+                <div class="value-pill">
+                  <div class="value-dot"></div>
+                  {{ pred.best_bet.label }} @ {{ "%.2f"|format(pred.best_bet.odds) }} (+{{ "%.0f"|format(pred.best_bet.edge * 100) }}%)
+                </div>
+                {% else %}
+                <div style="width:120px"></div>
+                {% endif %}
+              </a>
+              {% else %}
+              <div class="no-data">{{ m.home_team }} vs {{ m.away_team }} — données insuffisantes</div>
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+    {% endif %}
+  {% endfor %}
+
+{% endif %}
+{% else %}
+<div style="padding:40px;text-align:center;color:var(--text-muted);font-size:14px">
+  Aucun match trouvé pour les 7 prochains jours.
+</div>
+{% endif %}
+
+
+{% elif tab == 'backtest' %}
+{# ══════════════════════════════════════════ BACKTEST ══════════════════════════════════════════ #}
+
+<div class="page-header">
+  <div class="page-title">Backtest</div>
+  <div class="page-sub">Simulation sur les 20 derniers % des données. Le modèle n'a pas vu ces matchs.</div>
+</div>
+
+<div class="bt-controls">
+  <div class="bt-control-group">
+    <label>Seuil value bet — <span id="threshold-val">5</span>%</label>
+    <input type="range" id="threshold" min="1" max="15" step="1" value="5">
+  </div>
+  <div class="bt-control-group">
+    <label>Mise unitaire (€)</label>
+    <input type="number" id="mise" min="1" max="500" value="10">
+  </div>
+  <button class="btn btn-dark" onclick="runBacktest()">Calculer</button>
+</div>
+
+<div class="bt-metrics" id="bt-metrics">
+  <div class="bt-metric"><div class="bt-metric-label">Paris placés</div><div class="bt-metric-val" id="bt-n">—</div></div>
+  <div class="bt-metric"><div class="bt-metric-label">ROI</div><div class="bt-metric-val" id="bt-roi">—</div></div>
+  <div class="bt-metric"><div class="bt-metric-label">Taux de réussite</div><div class="bt-metric-val" id="bt-wr">—</div></div>
+  <div class="bt-metric"><div class="bt-metric-label">Profit total</div><div class="bt-metric-val" id="bt-profit">—</div></div>
+</div>
+
+<div class="bt-chart-wrap">
+  <canvas id="bt-chart"></canvas>
+</div>
+
+<div style="overflow-x:auto">
+  <table class="bt-table" id="bt-table">
+    <thead>
+      <tr>
+        <th>Date</th><th>Match</th><th>Pari</th><th>Cote</th><th>Proba</th><th>Résultat</th><th>Profit</th>
+      </tr>
+    </thead>
+    <tbody id="bt-tbody"></tbody>
+  </table>
+</div>
+
+
+{% elif tab == 'account' %}
+{# ══════════════════════════════════════════ COMPTE ══════════════════════════════════════════ #}
+
+{% if user %}
+<div class="page-header">
+  <div class="user-name">Bonjour, {{ user.username }}</div>
+  <div class="user-email">{{ user.email }}</div>
+</div>
+
+{% if user_stats and user_stats.total > 0 %}
+<div class="section-label">Mes performances</div>
+<div class="stat-grid">
+  <div class="stat-item"><div class="stat-val">{{ user_stats.total }}</div><div class="stat-lbl">Paris suivis</div></div>
+  <div class="stat-item"><div class="stat-val">{{ "%.0f"|format(user_stats.win_rate) }}%</div><div class="stat-lbl">Taux de réussite</div></div>
+  <div class="stat-item"><div class="stat-val">{{ "%+.1f"|format(user_stats.roi) }}%</div><div class="stat-lbl">ROI</div></div>
+  <div class="stat-item"><div class="stat-val" style="color:{% if user_stats.total_profit >= 0 %}var(--green){% else %}var(--red){% endif %}">{{ "%+.1f"|format(user_stats.total_profit) }}€</div><div class="stat-lbl">Profit</div></div>
+</div>
+
+{% if user_stats.bets %}
+<div class="section-label">Historique des paris</div>
+<div style="overflow-x:auto">
+  <table class="bt-table">
+    <thead><tr><th>Match</th><th>Pari</th><th>Cote</th><th>Mise</th><th>Résultat</th><th>Profit</th></tr></thead>
+    <tbody>
+      {% for b in user_stats.bets %}
+      <tr>
+        <td>{{ b.home_team }} vs {{ b.away_team }}</td>
+        <td>{{ b.bet_label }}</td>
+        <td><span style="font-family:var(--mono)">{{ b.odds }}</span></td>
+        <td><span style="font-family:var(--mono)">{{ b.stake }}€</span></td>
+        <td>{{ b.result or '—' }}</td>
+        <td style="font-family:var(--mono);{% if b.profit and b.profit > 0 %}color:var(--green){% elif b.profit %}color:var(--red){% endif %}">
+          {% if b.profit is not none %}{{ "%+.1f"|format(b.profit) }}€{% else %}—{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% else %}
+<div style="padding:32px;background:var(--bg);border-radius:var(--radius);border:1px solid var(--border);color:var(--text-muted);font-size:14px;text-align:center;margin-bottom:24px">
+  Aucun pari suivi pour l'instant. Rendez-vous sur une page de match pour ajouter un pari.
+</div>
+{% endif %}
+
+{% else %}
+{# Formulaire auth #}
+<div class="auth-wrap">
+  <div class="page-header" style="text-align:center">
+    <div class="page-title">Mon compte</div>
+    <div class="page-sub">Suivez vos paris et analysez vos performances</div>
+  </div>
+
+  <div class="auth-tabs">
+    <button class="auth-tab active" onclick="showTab('login')">Connexion</button>
+    <button class="auth-tab" onclick="showTab('register')">Créer un compte</button>
+  </div>
+
+  <div id="login-form" class="auth-card">
+    <form method="POST" action="/login">
+      <div class="form-group">
+        <label class="form-label">Nom d'utilisateur</label>
+        <input class="form-input" type="text" name="username" placeholder="votre_username" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Mot de passe</label>
+        <input class="form-input" type="password" name="password" placeholder="••••••••" required>
+      </div>
+      <button type="submit" class="btn btn-dark" style="width:100%;justify-content:center;margin-top:8px">Se connecter</button>
+    </form>
+  </div>
+
+  <div id="register-form" class="auth-card" style="display:none">
+    <form method="POST" action="/register">
+      <div class="form-group">
+        <label class="form-label">Nom d'utilisateur</label>
+        <input class="form-input" type="text" name="username" placeholder="votre_username" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Email</label>
+        <input class="form-input" type="email" name="email" placeholder="vous@email.com" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Mot de passe</label>
+        <input class="form-input" type="password" name="password" placeholder="6 caractères minimum" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Confirmer</label>
+        <input class="form-input" type="password" name="password2" placeholder="••••••••" required>
+      </div>
+      <button type="submit" class="btn btn-dark" style="width:100%;justify-content:center;margin-top:8px">Créer mon compte</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script>
+function showTab(name) {
+  document.getElementById('login-form').style.display = name === 'login' ? '' : 'none';
+  document.getElementById('register-form').style.display = name === 'register' ? '' : 'none';
+  document.querySelectorAll('.auth-tab').forEach((t,i) => t.classList.toggle('active', (i===0&&name==='login')||(i===1&&name==='register')));
+}
+
+let btChart = null;
+
+async function runBacktest() {
+  const threshold = document.getElementById('threshold').value / 100;
+  const mise = document.getElementById('mise').value;
+  const res = await fetch(`/backtest-data?threshold=${threshold}&mise=${mise}`);
+  const data = await res.json();
+
+  if (data.empty) {
+    document.getElementById('bt-n').textContent = '0';
+    document.getElementById('bt-roi').textContent = '—';
+    document.getElementById('bt-wr').textContent = '—';
+    document.getElementById('bt-profit').textContent = '—';
+    document.getElementById('bt-tbody').innerHTML = '<tr><td colspan="7" style="color:var(--text-muted);text-align:center;padding:20px">Aucun value bet détecté. Baissez le seuil.</td></tr>';
+    if (btChart) btChart.destroy();
+    return;
+  }
+
+  document.getElementById('bt-n').textContent = data.n;
+  document.getElementById('bt-roi').textContent = (data.roi > 0 ? '+' : '') + data.roi + '%';
+  document.getElementById('bt-profit').textContent = (data.profit > 0 ? '+' : '') + data.profit + '€';
+  document.getElementById('bt-wr').textContent = data.win_rate + '%';
+
+  const init = mise * data.n;
+  const labels = data.bankroll.map((_,i) => i+1);
+  if (btChart) btChart.destroy();
+  btChart = new Chart(document.getElementById('bt-chart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        data: data.bankroll,
+        borderColor: '#0f172a', borderWidth: 2,
+        fill: true,
+        backgroundColor: (ctx) => {
+          const g = ctx.chart.ctx.createLinearGradient(0,0,0,200);
+          g.addColorStop(0,'rgba(15,23,42,.08)');
+          g.addColorStop(1,'rgba(15,23,42,.01)');
+          return g;
+        },
+        tension: 0.3, pointRadius: 0,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { display: false },
+        y: { grid: { color: '#f1f5f9' }, ticks: { font: { family: 'JetBrains Mono', size: 11 } } }
+      }
+    }
+  });
+
+  const pariMap = {'H':'Dom.','D':'Nul','A':'Ext.'};
+  document.getElementById('bt-tbody').innerHTML = data.bets.map(b => `
+    <tr>
+      <td style="font-family:var(--mono);font-size:12px">${b.Date}</td>
+      <td>${b.Match}</td>
+      <td>${pariMap[b.Pari] || b.Pari}</td>
+      <td style="font-family:var(--mono)">${b.Cote}</td>
+      <td style="font-family:var(--mono)">${Math.round(b.Proba_modele * 100)}%</td>
+      <td class="${b['Gagné'] ? 'won-yes' : 'won-no'}">${b['Gagné'] ? 'Gagné' : 'Perdu'}</td>
+      <td style="font-family:var(--mono);${b.Profit > 0 ? 'color:var(--green)' : 'color:var(--red)'}">${b.Profit > 0 ? '+' : ''}${b.Profit.toFixed(2)}€</td>
+    </tr>
+  `).join('');
+}
+
+const slider = document.getElementById('threshold');
+if (slider) {
+  slider.addEventListener('input', () => {
+    document.getElementById('threshold-val').textContent = slider.value;
+  });
+  runBacktest();
+}
+</script>
+{% endblock %}

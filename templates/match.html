@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% set tab = 'matches' %}
+{% block title %}{{ match.home_team }} vs {{ match.away_team }} — RockIA{% endblock %}
+
+{% block content %}
+
+<a href="/" class="back-link">← Retour aux matchs</a>
+
+<div class="match-header">
+  <div class="match-comp">
+    {% set comp = competitions.get(match.league_code, {}) %}
+    <div class="league-badge" style="width:28px;height:28px;font-size:8px;background:{{ comp.bg or '#f1f5f9' }};border:1px solid {{ comp.color or '#94a3b8' }}44;color:{{ comp.color or '#64748b' }}">
+      {{ comp.short or match.league_code }}
+    </div>
+    <span class="match-comp-name">{{ comp.name or match.league_code }}</span>
+    <span style="color:var(--text-muted)">·</span>
+    <span class="match-comp-time">{{ dt.strftime('%d %b %Y · %H:%M') }}</span>
+  </div>
+  <div class="match-title">
+    {{ match.home_team }}
+    <span class="match-vs">vs</span>
+    {{ match.away_team }}
+  </div>
+  {% if pred.home_m != match.home_team %}
+  <div style="font-size:12px;color:var(--text-muted);margin-top:6px">Dom. → données de <strong>{{ pred.home_m }}</strong></div>
+  {% endif %}
+  {% if pred.away_m != match.away_team %}
+  <div style="font-size:12px;color:var(--text-muted);margin-top:2px">Ext. → données de <strong>{{ pred.away_m }}</strong></div>
+  {% endif %}
+</div>
+
+{# ── PROBABILITÉS ─────────────────────────────────── #}
+<div class="section-label">Prédiction du modèle</div>
+{% set winner = pred.proba.index(pred.proba | max) %}
+<div style="font-size:13px;color:var(--text-secondary);margin-bottom:14px">
+  Issue la plus probable : <strong style="color:var(--text-primary)">
+    {% if winner == 0 %}Victoire domicile{% elif winner == 1 %}Match nul{% else %}Victoire extérieur{% endif %}
+  </strong>
+</div>
+
+<div class="prob-bars">
+  {% set labels = [match.home_team, 'Nul', match.away_team] %}
+  {% set classes = ['fill-H', 'fill-D', 'fill-A'] %}
+  {% for i in range(3) %}
+  <div class="prob-row">
+    <div class="prob-label-txt">{{ labels[i] }}</div>
+    <div class="prob-bar-bg">
+      <div class="prob-bar-fill {{ classes[i] }}" style="width:{{ [pred.proba[i]*100, 4] | max }}%">
+        {{ "%.0f"|format(pred.proba[i]*100) }}%
+      </div>
+    </div>
+    <div class="prob-pct">{{ "%.0f"|format(pred.proba[i]*100) }}%</div>
+  </div>
+  {% endfor %}
+</div>
+
+{# ── COTES ───────────────────────────────────────── #}
+<div class="section-label">Cotes — modèle vs bookmaker</div>
+<div class="odds-grid">
+  {% set outcome_labels = [match.home_team, 'Nul', match.away_team] %}
+  {% for i in range(3) %}
+  {% set edge = pred.edges[i] %}
+  <div class="odds-card">
+    <div class="odds-card-title">{{ outcome_labels[i] }}</div>
+    <div class="odds-line"><span>Cote</span><span class="val">{{ "%.2f"|format(pred.odds[i]) }}</span></div>
+    <div class="odds-line"><span>Modèle</span><span class="val">{{ "%.0f"|format(pred.proba[i]*100) }}%</span></div>
+    <div class="odds-line"><span>Implicite</span><span class="val">{{ "%.0f"|format(pred.implied[i]*100) }}%</span></div>
+    <div>
+      <span class="edge-tag {% if edge > 0.05 %}edge-pos{% else %}edge-neg{% endif %}">
+        {{ "%+.1f"|format(edge*100) }}%
+      </span>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{# ── FORME ───────────────────────────────────────── #}
+<div class="section-label">Forme récente — 8 derniers matchs</div>
+<div class="form-teams">
+  {% for team_name, stats in [(match.home_team, pred.hs), (match.away_team, pred.as_)] %}
+  <div>
+    <div class="form-team-name">{{ team_name }}</div>
+    <div class="form-row">
+      {% for r in stats.last_results %}
+      <div class="form-dot {{ r.result }}" title="vs {{ r.opponent }} {{ r.gf }}-{{ r.ga }} ({{ r.date }})">
+        {{ r.result }}
+      </div>
+      {% endfor %}
+    </div>
+    <div class="form-stats">
+      {{ "%.1f"|format(stats.avg_scored) }} buts/match · {{ "%.1f"|format(stats.avg_conceded) }} encaissés
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{# ── ELO ─────────────────────────────────────────── #}
+<div class="section-label">Rating ELO</div>
+{% set elo_min = [pred.home_elo, pred.away_elo] | min %}
+{% set elo_max = [pred.home_elo, pred.away_elo] | max %}
+{% set elo_range = [(elo_max - elo_min), 1] | max %}
+<div class="elo-grid">
+  {% for team_name, elo in [(match.home_team, pred.home_elo), (match.away_team, pred.away_elo)] %}
+  {% set pct = [((elo - elo_min) / elo_range * 100), 8] | max %}
+  <div class="elo-item">
+    <div class="elo-team">{{ team_name }}</div>
+    <div class="elo-bar-bg">
+      <div class="elo-bar-fill" style="width:{{ pct }}%;background:{% if loop.first %}#dbeafe;color:#1e40af{% else %}#ede9fe;color:#4c1d95{% endif %}">
+        {{ "%.0f"|format(elo) }}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{# ── PARIS CONSEILLÉ ─────────────────────────────── #}
+<div class="section-label">Paris conseillé</div>
+{% if pred.best_bet %}
+{% set best = pred.best_bet %}
+<div class="bet-card">
+  <div class="bet-main">{{ best.label }} @ {{ "%.2f"|format(best.odds) }}</div>
+  <div class="bet-meta">
+    Modèle {{ "%.0f"|format(best.proba*100) }}% · Implicite {{ "%.0f"|format(100/best.odds) }}% · Edge +{{ "%.1f"|format(best.edge*100) }}% · ¼ Kelly {{ "%.1f"|format(best.kelly*100) }}%
+  </div>
+
+  {% if user %}
+    {% if already_tracked %}
+    <div style="margin-top:16px;font-size:13px;color:var(--green)">✓ Pari déjà suivi</div>
+    {% else %}
+    <form method="POST" action="/track-bet" class="stake-wrap">
+      <input type="hidden" name="match_id" value="{{ match.id }}">
+      <input type="number" name="stake" class="stake-input" value="10" min="1" max="500" step="1"> €
+      <button type="submit" class="btn btn-dark">Ajouter à mon suivi</button>
+    </form>
+    {% endif %}
+  {% else %}
+  <div style="margin-top:14px;font-size:13px;color:var(--text-muted)">
+    <a href="/?tab=account" style="color:var(--blue)">Connectez-vous</a> pour suivre ce pari.
+  </div>
+  {% endif %}
+</div>
+
+{% else %}
+<div class="bet-no">Aucun paris intéressant détecté sur ce match pour l'instant.</div>
+{% endif %}
+
+{% endblock %}
