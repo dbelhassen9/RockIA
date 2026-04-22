@@ -1,0 +1,1851 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RockAI — Sports Betting Platform</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:wght@300;400;500&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #080c10;
+    --surface: #0d1318;
+    --surface2: #111820;
+    --border: rgba(255,255,255,0.06);
+    --border-accent: rgba(0,210,220,0.28);
+    --accent: #00d4dc;
+    --accent-dim: rgba(0,210,220,0.12);
+    --accent-glow: rgba(0,210,220,0.38);
+    --red: #ff4757;
+    --red-dim: rgba(255,71,87,0.12);
+    --gold: #ffd700;
+    --gold-dim: rgba(255,215,0,0.12);
+    --text: #e8edf2;
+    --text-muted: #4a5568;
+    --text-dim: #8892a4;
+    --font-display: 'Syne', sans-serif;
+    --font-mono: 'DM Mono', monospace;
+    --font-body: 'DM Sans', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ─── NOISE OVERLAY ─── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 9999;
+    opacity: 0.4;
+  }
+
+  /* ─── PAGES ─── */
+  .page { display: none; min-height: 100vh; }
+  .page.active { display: flex; flex-direction: column; animation: fadeIn 0.4s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* ─── NAV ─── */
+  nav {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 2rem;
+    height: 60px;
+    background: rgba(8,12,16,0.85);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .nav-logo {
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .nav-logo span {
+    color: var(--accent);
+  }
+
+  .nav-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 10px var(--accent-glow);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  .nav-links {
+    display: flex;
+    gap: 0.25rem;
+  }
+
+  .nav-btn {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.05em;
+    padding: 0.4rem 1rem;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: transparent;
+    color: var(--text-dim);
+    text-transform: uppercase;
+  }
+
+  .nav-btn:hover { color: var(--text); background: var(--surface2); }
+  .nav-btn.active { color: var(--accent); border-color: var(--border-accent); background: var(--accent-dim); }
+
+  .nav-user {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.82rem;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+  }
+
+  .avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #00d4dc 0%, #0080ff 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 0.7rem;
+    color: #080c10;
+  }
+
+  /* ─── LOGIN PAGE ─── */
+  #login {
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .login-bg {
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 60% 50% at 30% 50%, rgba(0,210,220,0.07) 0%, transparent 70%),
+      radial-gradient(ellipse 50% 60% at 80% 30%, rgba(0,184,255,0.04) 0%, transparent 70%);
+  }
+
+  .login-grid {
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+    background-size: 60px 60px;
+    mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black, transparent);
+  }
+
+  .login-wrap {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6rem;
+    align-items: center;
+    max-width: 1000px;
+    padding: 3rem 2rem;
+    width: 100%;
+  }
+
+  .login-hero h1 {
+    font-family: var(--font-display);
+    font-size: 3.8rem;
+    font-weight: 800;
+    line-height: 1.0;
+    letter-spacing: -0.04em;
+    margin-bottom: 1.5rem;
+  }
+
+  .login-hero h1 em {
+    font-style: normal;
+    color: var(--accent);
+    text-shadow: 0 0 40px var(--accent-glow);
+  }
+
+  .login-hero p {
+    color: var(--text-dim);
+    font-size: 0.95rem;
+    line-height: 1.7;
+    margin-bottom: 2rem;
+    font-weight: 300;
+  }
+
+  .stat-pills {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .pill {
+    display: flex;
+    flex-direction: column;
+    padding: 0.6rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+  }
+
+  .pill-val {
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--accent);
+  }
+
+  .pill-label {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-top: 0.1rem;
+  }
+
+  .login-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 2.5rem;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .login-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  }
+
+  .login-card h2 {
+    font-family: var(--font-display);
+    font-size: 1.4rem;
+    font-weight: 700;
+    margin-bottom: 0.4rem;
+  }
+
+  .login-card p {
+    font-size: 0.82rem;
+    color: var(--text-dim);
+    margin-bottom: 2rem;
+    font-family: var(--font-mono);
+  }
+
+  .form-group { margin-bottom: 1.25rem; }
+
+  label {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-dim);
+    margin-bottom: 0.5rem;
+  }
+
+  input[type="email"], input[type="password"], input[type="text"] {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  input:focus { border-color: var(--accent); }
+
+  .btn-primary {
+    width: 100%;
+    padding: 0.85rem;
+    background: var(--accent);
+    color: #080c10;
+    border: none;
+    border-radius: 8px;
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.02em;
+    margin-top: 0.5rem;
+  }
+
+  .btn-primary:hover {
+    background: #00e87a;
+    box-shadow: 0 0 30px var(--accent-glow);
+    transform: translateY(-1px);
+  }
+
+  .login-divider {
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    margin: 1.25rem 0;
+    position: relative;
+  }
+
+  .login-divider::before, .login-divider::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    width: 40%;
+    height: 1px;
+    background: var(--border);
+  }
+  .login-divider::before { left: 0; }
+  .login-divider::after { right: 0; }
+
+  .btn-google {
+    width: 100%;
+    padding: 0.75rem;
+    background: var(--surface2);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-family: var(--font-body);
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+  }
+
+  .btn-google:hover { border-color: rgba(255,255,255,0.15); color: var(--text); }
+
+  .signup-link {
+    text-align: center;
+    margin-top: 1.5rem;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+  }
+
+  .signup-link a { color: var(--accent); text-decoration: none; }
+
+  /* ─── MAIN LAYOUT ─── */
+  .main-layout {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .page-content {
+    flex: 1;
+    padding: 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+    width: 100%;
+  }
+
+  .page-header {
+    margin-bottom: 2rem;
+  }
+
+  .page-header h1 {
+    font-family: var(--font-display);
+    font-size: 1.8rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    margin-bottom: 0.3rem;
+  }
+
+  .page-header p {
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    font-family: var(--font-mono);
+  }
+
+  /* ─── AGENDA PAGE ─── */
+  .filter-bar {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1.75rem;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .filter-chip {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 0.4rem 0.9rem;
+    border-radius: 100px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .filter-chip:hover { color: var(--text); border-color: rgba(255,255,255,0.15); }
+  .filter-chip.active { background: var(--accent-dim); border-color: var(--border-accent); color: var(--accent); }
+
+  .filter-sep { flex: 1; }
+
+  .date-label {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    margin-bottom: 0.75rem;
+    padding-left: 0.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+
+  .date-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  .matches-list { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 2rem; }
+
+  .match-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.1rem 1.5rem;
+    display: grid;
+    grid-template-columns: 1fr 2fr 1fr;
+    align-items: center;
+    gap: 1rem;
+    cursor: pointer;
+    transition: all 0.25s;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .match-card::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--border);
+    transition: background 0.25s;
+  }
+
+  .match-card:hover { border-color: rgba(255,255,255,0.1); transform: translateX(3px); background: var(--surface2); }
+  .match-card:hover::before { background: var(--accent); }
+
+  .match-card.value { border-color: var(--border-accent); }
+  .match-card.value::before { background: var(--accent); box-shadow: 0 0 10px var(--accent-glow); }
+
+  .match-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .match-league {
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+  }
+
+  .match-time {
+    font-family: var(--font-display);
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -0.02em;
+  }
+
+  .match-center {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+  }
+
+  .team {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+    flex: 1;
+  }
+
+  .team-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+  }
+
+  .team-name {
+    font-family: var(--font-display);
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-align: center;
+    letter-spacing: -0.01em;
+  }
+
+  .vs-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.2rem;
+  }
+
+  .vs-text {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--text-muted);
+  }
+
+  .match-odds-row {
+    display: flex;
+    gap: 0.3rem;
+  }
+
+  .odd-pill {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    padding: 0.2rem 0.4rem;
+    border-radius: 4px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+
+  .match-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.5rem;
+  }
+
+  .value-badge {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 0.25rem 0.6rem;
+    border-radius: 4px;
+  }
+
+  .value-badge.hot { background: var(--accent-dim); color: var(--accent); border: 1px solid var(--border-accent); }
+  .value-badge.neutral { background: var(--surface2); color: var(--text-muted); border: 1px solid var(--border); }
+  .value-badge.risk { background: var(--red-dim); color: var(--red); border: 1px solid rgba(255,71,87,0.2); }
+
+  .ev-value {
+    font-family: var(--font-display);
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--accent);
+  }
+
+  .ev-value.neg { color: var(--red); }
+
+  .ev-label {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    text-align: right;
+  }
+
+  /* ─── STATS PAGE ─── */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+
+  .kpi-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.25rem 1.5rem;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+
+  .kpi-card:hover { border-color: rgba(255,255,255,0.1); }
+
+  .kpi-card.accent-green { border-top: 2px solid var(--accent); }
+  .kpi-card.accent-red { border-top: 2px solid var(--red); }
+  .kpi-card.accent-gold { border-top: 2px solid var(--gold); }
+  .kpi-card.accent-blue { border-top: 2px solid #00b8ff; }
+
+  .kpi-icon {
+    font-size: 1.2rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .kpi-val {
+    font-family: var(--font-display);
+    font-size: 2rem;
+    font-weight: 800;
+    letter-spacing: -0.04em;
+    line-height: 1;
+    margin-bottom: 0.3rem;
+  }
+
+  .kpi-val.green { color: var(--accent); }
+  .kpi-val.red { color: var(--red); }
+  .kpi-val.gold { color: var(--gold); }
+  .kpi-val.blue { color: #00b8ff; }
+
+  .kpi-label {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    margin-bottom: 0.6rem;
+  }
+
+  .kpi-trend {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--text-dim);
+  }
+
+  .kpi-trend span.up { color: var(--accent); }
+  .kpi-trend span.down { color: var(--red); }
+
+  .stats-bottom {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 1rem;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem;
+  }
+
+  .card-title {
+    font-family: var(--font-display);
+    font-size: 0.9rem;
+    font-weight: 700;
+    margin-bottom: 0.3rem;
+    letter-spacing: -0.01em;
+  }
+
+  .card-sub {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 1.5rem;
+  }
+
+  /* ROI Chart */
+  .roi-chart {
+    position: relative;
+    height: 160px;
+    display: flex;
+    align-items: flex-end;
+    gap: 4px;
+  }
+
+  .roi-bar-wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    height: 100%;
+    justify-content: flex-end;
+  }
+
+  .roi-bar {
+    width: 100%;
+    border-radius: 4px 4px 0 0;
+    transition: opacity 0.2s;
+    min-height: 2px;
+  }
+
+  .roi-bar:hover { opacity: 0.7; }
+  .roi-bar.pos { background: linear-gradient(180deg, var(--accent), rgba(0,210,220,0.3)); }
+  .roi-bar.neg { background: linear-gradient(180deg, var(--red), rgba(255,71,87,0.4)); border-radius: 0 0 4px 4px; }
+
+  .roi-month {
+    font-family: var(--font-mono);
+    font-size: 0.55rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+  }
+
+  .chart-zero {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: var(--border);
+    bottom: 22px;
+  }
+
+  /* Bet history table */
+  .bet-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .bet-table th {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    text-align: left;
+    padding: 0 0.75rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .bet-table td {
+    padding: 0.75rem;
+    font-size: 0.8rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+  }
+
+  .bet-table tr:last-child td { border-bottom: none; }
+  .bet-table tr:hover td { background: var(--surface2); }
+
+  .bet-team {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 0.82rem;
+    letter-spacing: -0.01em;
+  }
+
+  .bet-league-tag {
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    color: var(--text-muted);
+  }
+
+  .result-badge {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    font-weight: 500;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .result-badge.win { background: var(--accent-dim); color: var(--accent); }
+  .result-badge.loss { background: var(--red-dim); color: var(--red); }
+  .result-badge.pending { background: var(--gold-dim); color: var(--gold); }
+
+  .pnl-pos { color: var(--accent); font-family: var(--font-mono); font-size: 0.8rem; font-weight: 500; }
+  .pnl-neg { color: var(--red); font-family: var(--font-mono); font-size: 0.8rem; font-weight: 500; }
+
+  /* Distribution */
+  .dist-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.9rem;
+  }
+
+  .dist-label {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    color: var(--text-dim);
+    width: 80px;
+    flex-shrink: 0;
+  }
+
+  .dist-bar-bg {
+    flex: 1;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--surface2);
+    overflow: hidden;
+  }
+
+  .dist-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 1s ease;
+  }
+
+  .dist-pct {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    color: var(--text-dim);
+    width: 35px;
+    text-align: right;
+  }
+
+  /* Plan badge */
+  .plan-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 0.3rem 0.7rem;
+    border-radius: 100px;
+    background: var(--gold-dim);
+    color: var(--gold);
+    border: 1px solid rgba(255,215,0,0.2);
+    margin-left: 0.75rem;
+    vertical-align: middle;
+  }
+
+  /* ─── ANALYSIS PAGE ─── */
+  .analysis-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 2rem;
+    flex-wrap: wrap;
+  }
+  .back-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.5rem 0.9rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    flex-shrink: 0;
+  }
+  .back-btn:hover { color: var(--text); border-color: rgba(255,255,255,0.15); }
+  .match-title-block { flex: 1; }
+  .match-title-block h1 {
+    font-family: var(--font-display);
+    font-size: 1.6rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    margin-bottom: 0.25rem;
+  }
+  .match-title-block p {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .analysis-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+  .teams-hero {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: relative;
+    overflow: hidden;
+    grid-column: 1 / -1;
+  }
+  .teams-hero::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse 60% 80% at 50% 50%, rgba(0,210,220,0.05), transparent);
+    pointer-events: none;
+  }
+  .team-hero-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    flex: 1;
+  }
+  .team-hero-icon {
+    width: 72px; height: 72px;
+    border-radius: 50%;
+    background: var(--surface2);
+    border: 2px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 2.2rem;
+  }
+  .team-hero-name {
+    font-family: var(--font-display);
+    font-size: 1.3rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }
+  .team-hero-form { display: flex; gap: 0.3rem; }
+  .form-dot {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.55rem;
+    font-family: var(--font-mono);
+    font-weight: 700;
+  }
+  .form-dot.w { background: var(--accent-dim); color: var(--accent); border: 1px solid var(--border-accent); }
+  .form-dot.d { background: rgba(255,215,0,0.12); color: var(--gold); border: 1px solid rgba(255,215,0,0.2); }
+  .form-dot.l { background: var(--red-dim); color: var(--red); border: 1px solid rgba(255,71,87,0.2); }
+  .vs-hero {
+    display: flex; flex-direction: column;
+    align-items: center; gap: 0.75rem;
+    padding: 0 2rem;
+  }
+  .vs-hero-label {
+    font-family: var(--font-mono);
+    font-size: 0.65rem; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.1em;
+  }
+  .vs-hero-time {
+    font-family: var(--font-display);
+    font-size: 2rem; font-weight: 800;
+    letter-spacing: -0.04em;
+    color: var(--accent);
+    text-shadow: 0 0 30px var(--accent-glow);
+  }
+  .odds-row { display: flex; gap: 0.5rem; }
+  .odd-block {
+    display: flex; flex-direction: column;
+    align-items: center; gap: 0.2rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px; min-width: 52px;
+  }
+  .odd-block.best { border-color: var(--border-accent); background: var(--accent-dim); }
+  .odd-val { font-family: var(--font-display); font-size: 1rem; font-weight: 700; letter-spacing: -0.02em; }
+  .odd-block.best .odd-val { color: var(--accent); }
+  .odd-lbl { font-family: var(--font-mono); font-size: 0.55rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
+
+  /* Proba bars */
+  .proba-section { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 1.5rem; }
+  .proba-row { display: flex; align-items: center; gap: 0.75rem; }
+  .proba-label { font-family: var(--font-mono); font-size: 0.68rem; color: var(--text-dim); width: 40px; flex-shrink: 0; }
+  .proba-bar { flex: 1; height: 8px; border-radius: 4px; background: var(--surface2); overflow: hidden; }
+  .proba-fill { height: 100%; border-radius: 4px; }
+  .proba-pct { font-family: var(--font-display); font-size: 0.9rem; font-weight: 700; width: 42px; text-align: right; letter-spacing: -0.02em; }
+
+  /* Verdict */
+  .verdict-card {
+    background: var(--surface);
+    border: 1px solid var(--border-accent);
+    border-radius: 16px;
+    padding: 1.75rem;
+    position: relative; overflow: hidden;
+  }
+  .verdict-card::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  }
+  .verdict-header { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem; }
+  .ai-badge {
+    font-family: var(--font-mono); font-size: 0.6rem;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    padding: 0.25rem 0.6rem;
+    background: var(--accent-dim); color: var(--accent);
+    border: 1px solid var(--border-accent); border-radius: 4px;
+  }
+  .verdict-title { font-family: var(--font-display); font-size: 0.9rem; font-weight: 700; letter-spacing: -0.01em; }
+  .verdict-bet {
+    font-family: var(--font-display);
+    font-size: 1.6rem; font-weight: 800;
+    color: var(--accent); letter-spacing: -0.03em;
+    text-shadow: 0 0 30px var(--accent-glow);
+    margin-bottom: 0.25rem;
+  }
+  .verdict-sub { font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-dim); margin-bottom: 1.25rem; line-height: 1.5; }
+  .ev-display { display: flex; align-items: baseline; gap: 0.4rem; margin-bottom: 1rem; }
+  .ev-big { font-family: var(--font-display); font-size: 2.5rem; font-weight: 800; color: var(--accent); letter-spacing: -0.05em; line-height: 1; }
+  .ev-tag { font-family: var(--font-mono); font-size: 0.68rem; color: var(--text-muted); text-transform: uppercase; }
+  .kelly-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 0.75rem; background: var(--surface2); border-radius: 8px; margin-top: 0.75rem;
+  }
+  .kelly-label { font-family: var(--font-mono); font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); }
+  .kelly-val { font-family: var(--font-display); font-size: 1rem; font-weight: 700; color: var(--text); }
+
+  /* AI analysis */
+  .ai-analysis-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 1.75rem;
+    grid-column: 1 / -1;
+  }
+  .ai-thinking { display: flex; gap: 0.4rem; margin-bottom: 1rem; align-items: center; }
+  .thinking-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent); opacity: 0.4;
+    animation: thinkPulse 1.4s infinite;
+  }
+  .thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+  .thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes thinkPulse { 0%,100% { opacity: 0.2; transform: scale(1); } 50% { opacity: 1; transform: scale(1.3); } }
+  .ai-text { font-size: 0.88rem; line-height: 1.8; color: var(--text-dim); font-weight: 300; }
+  .ai-text strong { color: var(--text); font-weight: 500; }
+  .ai-text .highlight { color: var(--accent); font-family: var(--font-mono); font-size: 0.82rem; }
+  .stats-compare { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; margin-top: 1.5rem; }
+  .stat-compare-item {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1rem;
+    display: flex; flex-direction: column; gap: 0.75rem;
+  }
+  .stat-compare-label { font-family: var(--font-mono); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); text-align: center; }
+  .stat-compare-row { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+  .stat-val-left, .stat-val-right { font-family: var(--font-display); font-size: 1rem; font-weight: 700; letter-spacing: -0.02em; }
+  .stat-bar-compare { flex: 1; height: 5px; border-radius: 3px; background: var(--border); position: relative; overflow: hidden; }
+  .stat-bar-left { position: absolute; right: 50%; top: 0; bottom: 0; border-radius: 3px 0 0 3px; background: var(--accent); }
+  .stat-bar-right { position: absolute; left: 50%; top: 0; bottom: 0; border-radius: 0 3px 3px 0; background: var(--red); }
+
+</style>
+</head>
+<body>
+
+<!-- ═══════════════ LOGIN PAGE ═══════════════ -->
+<div id="login" class="page active">
+  <div class="login-bg"></div>
+  <div class="login-grid"></div>
+
+  <div class="login-wrap">
+    <!-- Hero -->
+    <div class="login-hero">
+      <div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:2rem;">
+        <div class="nav-dot"></div>
+        <span style="font-family:var(--font-mono);font-size:0.7rem;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-muted)">RockAI · Beta</span>
+      </div>
+      <h1>Parie avec<br>une <em>edge</em><br>réelle.</h1>
+      <p>Intelligence artificielle appliquée aux paris sportifs. Détection de value bets, suivi de ROI, analyse probabiliste sur chaque match.</p>
+      <div class="stat-pills">
+        <div class="pill">
+          <div class="pill-val">+18.4%</div>
+          <div class="pill-label">ROI moyen</div>
+        </div>
+        <div class="pill">
+          <div class="pill-val">63.2%</div>
+          <div class="pill-label">Taux de réussite</div>
+        </div>
+        <div class="pill">
+          <div class="pill-val">4 800+</div>
+          <div class="pill-label">Matchs analysés</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Card -->
+    <div class="login-card">
+      <h2>Connexion</h2>
+      <p>// accès membre requis</p>
+
+      <div class="form-group">
+        <label>Email</label>
+        <input type="email" placeholder="vous@exemple.fr">
+      </div>
+      <div class="form-group">
+        <label>Mot de passe</label>
+        <input type="password" placeholder="••••••••••">
+      </div>
+
+      <button class="btn-primary" onclick="showPage('agenda')">
+        Accéder à la plateforme →
+      </button>
+
+      <div class="login-divider">ou continuer avec</div>
+
+      <button class="btn-google" onclick="showPage('agenda')">
+        <svg width="16" height="16" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+        Continuer avec Google
+      </button>
+
+      <div class="signup-link">
+        Pas encore membre ? <a href="#">Demander un accès</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ AGENDA PAGE ═══════════════ -->
+<div id="agenda" class="page">
+  <nav>
+    <div class="nav-logo">Rock<span>AI</span> <div class="nav-dot"></div></div>
+    <div class="nav-links">
+      <button class="nav-btn active" onclick="showPage('agenda')">Agenda</button>
+      <button class="nav-btn" onclick="showPage('stats')">Statistiques</button>
+    </div>
+    <div class="nav-user">
+      <div class="avatar">JD</div>
+      <span>Jean D.</span>
+      <span class="plan-badge">⭐ Pro</span>
+    </div>
+  </nav>
+
+  <div class="main-layout">
+    <div class="page-content">
+      <div class="page-header">
+        <h1>Agenda des matchs</h1>
+        <p>// 24 matchs analysés · mis à jour il y a 4 min</p>
+      </div>
+
+      <div class="filter-bar">
+        <button class="filter-chip active">Tous</button>
+        <button class="filter-chip">Value bets 🔥</button>
+        <button class="filter-chip">Ligue 1</button>
+        <button class="filter-chip">Premier League</button>
+        <button class="filter-chip">Champions League</button>
+        <button class="filter-chip">La Liga</button>
+        <div class="filter-sep"></div>
+        <button class="filter-chip">EV+ seulement</button>
+      </div>
+
+      <!-- Aujourd'hui -->
+      <div class="date-label">Aujourd'hui — Mercredi 22 Avril</div>
+      <div class="matches-list">
+
+        <div class="match-card value">
+          <div class="match-meta">
+            <div class="match-league">🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League</div>
+            <div class="match-time">20:45</div>
+          </div>
+          <div class="match-center">
+            <div class="team">
+              <div class="team-icon">🔴</div>
+              <div class="team-name">Arsenal</div>
+            </div>
+            <div class="vs-block">
+              <div class="vs-text">VS</div>
+              <div class="match-odds-row">
+                <div class="odd-pill">1.85</div>
+                <div class="odd-pill">3.40</div>
+                <div class="odd-pill">4.20</div>
+              </div>
+            </div>
+            <div class="team">
+              <div class="team-icon">🔵</div>
+              <div class="team-name">Chelsea</div>
+            </div>
+          </div>
+          <div class="match-right">
+            <div class="value-badge hot">Value bet ↑</div>
+            <div class="ev-value">+12.3%</div>
+            <div class="ev-label">Expected Value</div>
+          </div>
+        </div>
+
+        <div class="match-card">
+          <div class="match-meta">
+            <div class="match-league">🇫🇷 Ligue 1</div>
+            <div class="match-time">21:00</div>
+          </div>
+          <div class="match-center">
+            <div class="team">
+              <div class="team-icon">🔵</div>
+              <div class="team-name">PSG</div>
+            </div>
+            <div class="vs-block">
+              <div class="vs-text">VS</div>
+              <div class="match-odds-row">
+                <div class="odd-pill">1.35</div>
+                <div class="odd-pill">4.50</div>
+                <div class="odd-pill">8.00</div>
+              </div>
+            </div>
+            <div class="team">
+              <div class="team-icon">🔴</div>
+              <div class="team-name">Lyon</div>
+            </div>
+          </div>
+          <div class="match-right">
+            <div class="value-badge neutral">Neutre</div>
+            <div class="ev-value neg">-2.1%</div>
+            <div class="ev-label">Expected Value</div>
+          </div>
+        </div>
+
+        <div class="match-card value">
+          <div class="match-meta">
+            <div class="match-league">🇩🇪 Bundesliga</div>
+            <div class="match-time">18:30</div>
+          </div>
+          <div class="match-center">
+            <div class="team">
+              <div class="team-icon">🔴</div>
+              <div class="team-name">Bayern</div>
+            </div>
+            <div class="vs-block">
+              <div class="vs-text">VS</div>
+              <div class="match-odds-row">
+                <div class="odd-pill">1.55</div>
+                <div class="odd-pill">4.00</div>
+                <div class="odd-pill">5.50</div>
+              </div>
+            </div>
+            <div class="team">
+              <div class="team-icon">🟡</div>
+              <div class="team-name">Dortmund</div>
+            </div>
+          </div>
+          <div class="match-right">
+            <div class="value-badge hot">Value bet ↑</div>
+            <div class="ev-value">+8.7%</div>
+            <div class="ev-label">Expected Value</div>
+          </div>
+        </div>
+
+        <div class="match-card">
+          <div class="match-meta">
+            <div class="match-league">🇪🇸 La Liga</div>
+            <div class="match-time">22:00</div>
+          </div>
+          <div class="match-center">
+            <div class="team">
+              <div class="team-icon">⚪</div>
+              <div class="team-name">Real Madrid</div>
+            </div>
+            <div class="vs-block">
+              <div class="vs-text">VS</div>
+              <div class="match-odds-row">
+                <div class="odd-pill">2.10</div>
+                <div class="odd-pill">3.30</div>
+                <div class="odd-pill">3.60</div>
+              </div>
+            </div>
+            <div class="team">
+              <div class="team-icon">🔵</div>
+              <div class="team-name">Atlético</div>
+            </div>
+          </div>
+          <div class="match-right">
+            <div class="value-badge risk">Risqué</div>
+            <div class="ev-value neg">-5.4%</div>
+            <div class="ev-label">Expected Value</div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Demain -->
+      <div class="date-label">Demain — Jeudi 23 Avril</div>
+      <div class="matches-list">
+
+        <div class="match-card value">
+          <div class="match-meta">
+            <div class="match-league">🇮🇹 Serie A</div>
+            <div class="match-time">20:45</div>
+          </div>
+          <div class="match-center">
+            <div class="team">
+              <div class="team-icon">⚫</div>
+              <div class="team-name">Inter Milan</div>
+            </div>
+            <div class="vs-block">
+              <div class="vs-text">VS</div>
+              <div class="match-odds-row">
+                <div class="odd-pill">1.70</div>
+                <div class="odd-pill">3.60</div>
+                <div class="odd-pill">5.00</div>
+              </div>
+            </div>
+            <div class="team">
+              <div class="team-icon">🔵</div>
+              <div class="team-name">Napoli</div>
+            </div>
+          </div>
+          <div class="match-right">
+            <div class="value-badge hot">Value bet ↑</div>
+            <div class="ev-value">+15.1%</div>
+            <div class="ev-label">Expected Value</div>
+          </div>
+        </div>
+
+        <div class="match-card">
+          <div class="match-meta">
+            <div class="match-league">🏆 Champions League</div>
+            <div class="match-time">21:00</div>
+          </div>
+          <div class="match-center">
+            <div class="team">
+              <div class="team-icon">🔵</div>
+              <div class="team-name">Manchester City</div>
+            </div>
+            <div class="vs-block">
+              <div class="vs-text">VS</div>
+              <div class="match-odds-row">
+                <div class="odd-pill">1.45</div>
+                <div class="odd-pill">4.20</div>
+                <div class="odd-pill">7.00</div>
+              </div>
+            </div>
+            <div class="team">
+              <div class="team-icon">🔴</div>
+              <div class="team-name">Benfica</div>
+            </div>
+          </div>
+          <div class="match-right">
+            <div class="value-badge neutral">Neutre</div>
+            <div class="ev-value">+1.2%</div>
+            <div class="ev-label">Expected Value</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ STATS PAGE ═══════════════ -->
+<div id="stats" class="page">
+  <nav>
+    <div class="nav-logo">Rock<span>AI</span> <div class="nav-dot"></div></div>
+    <div class="nav-links">
+      <button class="nav-btn" onclick="showPage('agenda')">Agenda</button>
+      <button class="nav-btn active" onclick="showPage('stats')">Statistiques</button>
+    </div>
+    <div class="nav-user">
+      <div class="avatar">JD</div>
+      <span>Jean D.</span>
+      <span class="plan-badge">⭐ Pro</span>
+    </div>
+  </nav>
+
+  <div class="main-layout">
+    <div class="page-content">
+      <div class="page-header" style="display:flex;align-items:baseline;gap:1rem;flex-wrap:wrap;">
+        <div>
+          <h1>Mes statistiques</h1>
+          <p>// 247 paris · depuis Janvier 2025</p>
+        </div>
+        <div style="margin-left:auto;display:flex;gap:0.4rem;">
+          <button class="filter-chip active">3 mois</button>
+          <button class="filter-chip">6 mois</button>
+          <button class="filter-chip">1 an</button>
+          <button class="filter-chip">Tout</button>
+        </div>
+      </div>
+
+      <!-- KPIs -->
+      <div class="stats-grid">
+        <div class="kpi-card accent-green">
+          <div class="kpi-icon">📈</div>
+          <div class="kpi-val green">+18.4%</div>
+          <div class="kpi-label">ROI Global</div>
+          <div class="kpi-trend"><span class="up">↑ +3.2%</span> vs mois dernier</div>
+        </div>
+        <div class="kpi-card accent-blue">
+          <div class="kpi-icon">🎯</div>
+          <div class="kpi-val blue">63.2%</div>
+          <div class="kpi-label">Taux de réussite</div>
+          <div class="kpi-trend"><span class="up">↑ +1.8%</span> vs mois dernier</div>
+        </div>
+        <div class="kpi-card accent-gold">
+          <div class="kpi-icon">💰</div>
+          <div class="kpi-val gold">+2 847€</div>
+          <div class="kpi-label">Profit net</div>
+          <div class="kpi-trend"><span class="up">↑ +412€</span> ce mois</div>
+        </div>
+        <div class="kpi-card accent-red">
+          <div class="kpi-icon">📊</div>
+          <div class="kpi-val" style="color:var(--text);">247</div>
+          <div class="kpi-label">Paris placés</div>
+          <div class="kpi-trend">156 <span class="up">✓</span> · 91 <span class="down">✗</span></div>
+        </div>
+      </div>
+
+      <!-- Chart + Distribution -->
+      <div class="stats-bottom" style="margin-bottom:1rem;">
+        <!-- ROI par mois -->
+        <div class="card">
+          <div class="card-title">Évolution du ROI</div>
+          <div class="card-sub">// bénéfice mensuel en €</div>
+          <div class="roi-chart">
+            <div class="chart-zero"></div>
+            <div class="roi-bar-wrap">
+              <div class="roi-bar pos" style="height:35%"></div>
+              <div class="roi-month">Jan</div>
+            </div>
+            <div class="roi-bar-wrap">
+              <div class="roi-bar pos" style="height:55%"></div>
+              <div class="roi-month">Fév</div>
+            </div>
+            <div class="roi-bar-wrap" style="justify-content:flex-start;align-items:center;flex-direction:column-reverse;padding-bottom:22px;">
+              <div class="roi-month">Mar</div>
+              <div class="roi-bar neg" style="height:15%"></div>
+            </div>
+            <div class="roi-bar-wrap">
+              <div class="roi-bar pos" style="height:70%"></div>
+              <div class="roi-month">Avr</div>
+            </div>
+            <div class="roi-bar-wrap">
+              <div class="roi-bar pos" style="height:45%"></div>
+              <div class="roi-month">Mai</div>
+            </div>
+            <div class="roi-bar-wrap" style="justify-content:flex-start;align-items:center;flex-direction:column-reverse;padding-bottom:22px;">
+              <div class="roi-month">Jun</div>
+              <div class="roi-bar neg" style="height:25%"></div>
+            </div>
+            <div class="roi-bar-wrap">
+              <div class="roi-bar pos" style="height:80%"></div>
+              <div class="roi-month">Jul</div>
+            </div>
+            <div class="roi-bar-wrap">
+              <div class="roi-bar pos" style="height:60%"></div>
+              <div class="roi-month">Aoû</div>
+            </div>
+            <div class="roi-bar-wrap">
+              <div class="roi-bar pos" style="height:90%"></div>
+              <div class="roi-month">Sep</div>
+            </div>
+            <div class="roi-bar-wrap" style="justify-content:flex-start;align-items:center;flex-direction:column-reverse;padding-bottom:22px;">
+              <div class="roi-month">Oct</div>
+              <div class="roi-bar neg" style="height:10%"></div>
+            </div>
+            <div class="roi-bar-wrap">
+              <div class="roi-bar pos" style="height:75%"></div>
+              <div class="roi-month">Nov</div>
+            </div>
+            <div class="roi-bar-wrap">
+              <div class="roi-bar pos" style="height:65%"></div>
+              <div class="roi-month">Déc</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Distribution -->
+        <div class="card">
+          <div class="card-title">Répartition par ligue</div>
+          <div class="card-sub">// paris gagnants / total</div>
+
+          <div class="dist-row">
+            <div class="dist-label">Premier League</div>
+            <div class="dist-bar-bg"><div class="dist-bar-fill" style="width:78%;background:var(--accent);"></div></div>
+            <div class="dist-pct" style="color:var(--accent)">78%</div>
+          </div>
+          <div class="dist-row">
+            <div class="dist-label">Champions L.</div>
+            <div class="dist-bar-bg"><div class="dist-bar-fill" style="width:70%;background:#00b8ff;"></div></div>
+            <div class="dist-pct" style="color:#00b8ff">70%</div>
+          </div>
+          <div class="dist-row">
+            <div class="dist-label">Ligue 1</div>
+            <div class="dist-bar-bg"><div class="dist-bar-fill" style="width:65%;background:var(--gold);"></div></div>
+            <div class="dist-pct" style="color:var(--gold)">65%</div>
+          </div>
+          <div class="dist-row">
+            <div class="dist-label">Bundesliga</div>
+            <div class="dist-bar-bg"><div class="dist-bar-fill" style="width:58%;background:#ff8c42;"></div></div>
+            <div class="dist-pct" style="color:#ff8c42">58%</div>
+          </div>
+          <div class="dist-row">
+            <div class="dist-label">La Liga</div>
+            <div class="dist-bar-bg"><div class="dist-bar-fill" style="width:52%;background:#a855f7;"></div></div>
+            <div class="dist-pct" style="color:#a855f7">52%</div>
+          </div>
+          <div class="dist-row">
+            <div class="dist-label">Serie A</div>
+            <div class="dist-bar-bg"><div class="dist-bar-fill" style="width:48%;background:var(--red);"></div></div>
+            <div class="dist-pct" style="color:var(--red)">48%</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Historique -->
+      <div class="card">
+        <div class="card-title">Historique des paris</div>
+        <div class="card-sub">// 10 dernières opérations</div>
+        <table class="bet-table">
+          <thead>
+            <tr>
+              <th>Match</th>
+              <th>Pari</th>
+              <th>Cote</th>
+              <th>EV</th>
+              <th>Mise</th>
+              <th>Résultat</th>
+              <th>P&L</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><div class="bet-team">Arsenal vs Chelsea</div><div class="bet-league-tag">🏴󠁧󠁢󠁥󠁮󠁧󠁿 PL · 20 Avr</div></td>
+              <td style="font-family:var(--font-mono);font-size:0.78rem;">1 Arsenal</td>
+              <td style="font-family:var(--font-mono);font-size:0.78rem;">1.85</td>
+              <td style="color:var(--accent);font-family:var(--font-mono);font-size:0.78rem;">+12.3%</td>
+              <td style="font-family:var(--font-mono);font-size:0.78rem;">50€</td>
+              <td><span class="result-badge win">Gagné</span></td>
+              <td class="pnl-pos">+42.50€</td>
+            </tr>
+            <tr>
+              <td><div class="bet-team">Bayern vs Leipzig</div><div class="bet-league-tag">🇩🇪 Bundesliga · 19 Avr</div></td>
+              <td style="font-family:var(--font-mono);font-size:0.78rem;">1 Bayern</td>
+              <td style="font-family:var(--font-mono);font-size:0.78rem;">1.55</td>
+              <td style="color:var(--accent);font-family:var(--font-mono);font-size:0.78rem;">+8.7%</td>
+              <td style="font-family:var(--font-mono);font-size:0.78rem;">80€</td>
+              <td><span class="result-badge win">Gagné</span></td>
+              <td class="pnl-pos">+44.00€</td>
+            </tr>
+            <tr>
+              <td><div class="bet-team">PSG vs Monaco</div><div class="bet-league-tag">🇫🇷 Ligue 1 · 17 Avr</div></td>
+              <td style="font-family:var(--font-mono);font-size:0.78rem;">X Nul</td>
+              <td style="font-family:var(--font-mono);font-size:0.78rem;">3.80</td>
+              <td style="color:var(--accent);font-family:var(--font-mono);font-size:0.78rem;">+6.2%</td>
+              <td style="font-family:var(--font-mono);font-size:0.78rem;">30€</td>
+              <td><span class="result-badge loss">Perdu</span></td>
+              <td class="pnl-neg">-30.00€</td>
+            </tr>
+            <tr>
+              <td><div class="bet-team">Inter vs Juventus</div><div class="bet-league-tag">🇮🇹 Serie A · 15 Avr</div></td>
+              <td style="font-family:var(--font-mono);font-size:0.78rem;">1 Inter</td>
+              <td style="font-family:var(--font-mono);font-size:0.78rem;">2.10</td>
+              <td style="color:var(--accent);font-family:var(--font-mono);font-size:0.78rem;">+15.1%</td>
+              <td style="font-family:var(--font-mono);font-size:0.78rem;">60€</td>
+              <td><span class="result-badge win">Gagné</span></td>
+              <td class="pnl-pos">+66.00€</td>
+            </tr>
+            <tr>
+              <td><div class="bet-team">Real vs Barça</div><div class="bet-league-tag">🇪🇸 La Liga · 13 Avr</div></td>
+              <td style="font-family:var(--font-mono);font-size:0.78rem;">2 Barça</td>
+              <td style="font-family:var(--font-mono);font-size:0.78rem;">3.20</td>
+              <td style="color:var(--accent);font-family:var(--font-mono);font-size:0.78rem;">+9.8%</td>
+              <td style="font-family:var(--font-mono);font-size:0.78rem;">40€</td>
+              <td><span class="result-badge loss">Perdu</span></td>
+              <td class="pnl-neg">-40.00€</td>
+            </tr>
+            <tr>
+              <td><div class="bet-team">Man City vs Arsenal</div><div class="bet-league-tag">🏴󠁧󠁢󠁥󠁮󠁧󠁿 PL · 10 Avr</div></td>
+              <td style="font-family:var(--font-mono);font-size:0.78rem;">2 Arsenal</td>
+              <td style="font-family:var(--font-mono);font-size:0.78rem;">4.50</td>
+              <td style="color:var(--accent);font-family:var(--font-mono);font-size:0.78rem;">+11.4%</td>
+              <td style="font-family:var(--font-mono);font-size:0.78rem;">25€</td>
+              <td><span class="result-badge pending">En cours</span></td>
+              <td style="font-family:var(--font-mono);font-size:0.78rem;color:var(--text-muted)">—</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ ANALYSIS PAGE ═══════════════ -->
+<div id="analysis" class="page">
+  <nav>
+    <div class="nav-logo">Rock<span>AI</span> <div class="nav-dot"></div></div>
+    <div class="nav-links">
+      <button class="nav-btn" onclick="showPage('agenda')">Agenda</button>
+      <button class="nav-btn" onclick="showPage('stats')">Statistiques</button>
+    </div>
+    <div class="nav-user">
+      <div class="avatar">JD</div>
+      <span>Jean D.</span>
+      <span class="plan-badge">⭐ Pro</span>
+    </div>
+  </nav>
+
+  <div class="main-layout">
+    <div class="page-content">
+
+      <div class="analysis-header">
+        <button class="back-btn" onclick="showPage('agenda')">← Agenda</button>
+        <div class="match-title-block">
+          <h1>Arsenal vs Chelsea</h1>
+          <p>🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League · Mercredi 22 Avril · Emirates Stadium</p>
+        </div>
+        <div class="value-badge hot" style="font-size:0.75rem;padding:0.4rem 0.9rem;">🔥 Value Bet Détecté</div>
+      </div>
+
+      <!-- Teams hero + cotes -->
+      <div class="teams-hero" style="margin-bottom:1rem;">
+        <div class="team-hero-block">
+          <div class="team-hero-icon">🔴</div>
+          <div class="team-hero-name">Arsenal</div>
+          <div class="team-hero-form">
+            <div class="form-dot w">V</div>
+            <div class="form-dot w">V</div>
+            <div class="form-dot d">N</div>
+            <div class="form-dot w">V</div>
+            <div class="form-dot l">D</div>
+          </div>
+        </div>
+
+        <div class="vs-hero">
+          <div class="vs-hero-label">Coup d'envoi</div>
+          <div class="vs-hero-time">20:45</div>
+          <div class="vs-hero-label" style="margin-top:0.5rem;">Cotes</div>
+          <div class="odds-row">
+            <div class="odd-block best">
+              <div class="odd-val">1.85</div>
+              <div class="odd-lbl">1 — ARS</div>
+            </div>
+            <div class="odd-block">
+              <div class="odd-val">3.40</div>
+              <div class="odd-lbl">X — Nul</div>
+            </div>
+            <div class="odd-block">
+              <div class="odd-val">4.20</div>
+              <div class="odd-lbl">2 — CHE</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="team-hero-block">
+          <div class="team-hero-icon">🔵</div>
+          <div class="team-hero-name">Chelsea</div>
+          <div class="team-hero-form">
+            <div class="form-dot l">D</div>
+            <div class="form-dot w">V</div>
+            <div class="form-dot w">V</div>
+            <div class="form-dot d">N</div>
+            <div class="form-dot l">D</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Grid: probas + verdict -->
+      <div class="analysis-grid">
+
+        <!-- Probabilités -->
+        <div class="card">
+          <div class="card-title">Probabilités calculées par l'IA</div>
+          <div class="card-sub">// modèle vs bookmaker</div>
+
+          <div style="font-family:var(--font-mono);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-muted);margin-bottom:1rem;">Notre modèle</div>
+          <div class="proba-section">
+            <div class="proba-row">
+              <div class="proba-label">Arsenal</div>
+              <div class="proba-bar"><div class="proba-fill" style="width:56%;background:var(--accent);"></div></div>
+              <div class="proba-pct" style="color:var(--accent)">56%</div>
+            </div>
+            <div class="proba-row">
+              <div class="proba-label">Nul</div>
+              <div class="proba-bar"><div class="proba-fill" style="width:24%;background:var(--gold);"></div></div>
+              <div class="proba-pct" style="color:var(--gold)">24%</div>
+            </div>
+            <div class="proba-row">
+              <div class="proba-label">Chelsea</div>
+              <div class="proba-bar"><div class="proba-fill" style="width:20%;background:var(--red);"></div></div>
+              <div class="proba-pct" style="color:var(--red)">20%</div>
+            </div>
+          </div>
+
+          <div style="font-family:var(--font-mono);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-muted);margin-bottom:1rem;margin-top:1.5rem;">Bookmaker (implicite)</div>
+          <div class="proba-section">
+            <div class="proba-row">
+              <div class="proba-label">Arsenal</div>
+              <div class="proba-bar"><div class="proba-fill" style="width:50%;background:rgba(0,210,220,0.3);"></div></div>
+              <div class="proba-pct" style="color:var(--text-dim)">50%</div>
+            </div>
+            <div class="proba-row">
+              <div class="proba-label">Nul</div>
+              <div class="proba-bar"><div class="proba-fill" style="width:27%;background:rgba(255,215,0,0.25);"></div></div>
+              <div class="proba-pct" style="color:var(--text-dim)">27%</div>
+            </div>
+            <div class="proba-row">
+              <div class="proba-label">Chelsea</div>
+              <div class="proba-bar"><div class="proba-fill" style="width:23%;background:rgba(255,71,87,0.25);"></div></div>
+              <div class="proba-pct" style="color:var(--text-dim)">23%</div>
+            </div>
+          </div>
+
+          <!-- Stats comparées -->
+          <div class="stats-compare">
+            <div class="stat-compare-item">
+              <div class="stat-compare-label">Buts/match (dom.)</div>
+              <div class="stat-compare-row">
+                <div class="stat-val-left" style="color:var(--accent)">2.3</div>
+                <div class="stat-bar-compare">
+                  <div class="stat-bar-left" style="width:38%;"></div>
+                  <div class="stat-bar-right" style="width:25%;"></div>
+                </div>
+                <div class="stat-val-right" style="color:var(--red)">1.7</div>
+              </div>
+            </div>
+            <div class="stat-compare-item">
+              <div class="stat-compare-label">xG moyen</div>
+              <div class="stat-compare-row">
+                <div class="stat-val-left" style="color:var(--accent)">1.82</div>
+                <div class="stat-bar-compare">
+                  <div class="stat-bar-left" style="width:42%;"></div>
+                  <div class="stat-bar-right" style="width:30%;"></div>
+                </div>
+                <div class="stat-val-right" style="color:var(--red)">1.54</div>
+              </div>
+            </div>
+            <div class="stat-compare-item">
+              <div class="stat-compare-label">Clean sheets</div>
+              <div class="stat-compare-row">
+                <div class="stat-val-left" style="color:var(--accent)">6</div>
+                <div class="stat-bar-compare">
+                  <div class="stat-bar-left" style="width:35%;"></div>
+                  <div class="stat-bar-right" style="width:20%;"></div>
+                </div>
+                <div class="stat-val-right" style="color:var(--red)">4</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Verdict IA -->
+        <div class="verdict-card">
+          <div class="verdict-header">
+            <div class="ai-badge">IA Verdict</div>
+            <div class="verdict-title">Recommandation</div>
+          </div>
+
+          <div class="verdict-bet">✓ Parier Arsenal</div>
+          <div class="verdict-sub">Victoire à domicile · Cote 1.85<br>Notre modèle estime 56% de chances (vs 50% bookmaker)</div>
+
+          <div class="ev-display">
+            <div class="ev-big">+12.3%</div>
+            <div class="ev-tag">Expected<br>Value</div>
+          </div>
+
+          <div style="font-family:var(--font-mono);font-size:0.65rem;color:var(--text-muted);margin-bottom:0.5rem;text-transform:uppercase;letter-spacing:0.08em;">Gestion de mise</div>
+          <div class="kelly-row">
+            <div class="kelly-label">Critère de Kelly</div>
+            <div class="kelly-val">6.2%</div>
+          </div>
+          <div class="kelly-row" style="margin-top:0.4rem;">
+            <div class="kelly-label">Mise suggérée (100€)</div>
+            <div class="kelly-val" style="color:var(--accent)">6.20€</div>
+          </div>
+          <div class="kelly-row" style="margin-top:0.4rem;">
+            <div class="kelly-label">Gain potentiel</div>
+            <div class="kelly-val" style="color:var(--accent)">+5.47€</div>
+          </div>
+
+          <button class="btn-primary" style="margin-top:1.25rem;font-size:0.82rem;">
+            Enregistrer ce pari →
+          </button>
+        </div>
+
+        <!-- Analyse textuelle IA -->
+        <div class="ai-analysis-card">
+          <div class="card-title" style="margin-bottom:0.25rem;">Analyse complète par l'IA</div>
+          <div class="card-sub">// généré il y a 4 minutes</div>
+          <div class="ai-thinking">
+            <div class="thinking-dot"></div>
+            <div class="thinking-dot"></div>
+            <div class="thinking-dot"></div>
+            <span style="font-family:var(--font-mono);font-size:0.65rem;color:var(--text-muted);margin-left:0.25rem;">Analyse en cours...</span>
+          </div>
+          <div class="ai-text">
+            <strong>Contexte du match :</strong> Arsenal reçoit Chelsea à l'Emirates Stadium dans un derby londonien capital pour la course au titre. Arsenal reste sur <span class="highlight">4 victoires en 5 matchs</span> à domicile, avec un xG moyen de 1.82 par rencontre. Chelsea, en déplacement, affiche un bilan plus mitigé avec <span class="highlight">2 défaites en 5 dernières sorties.</span>
+            <br><br>
+            <strong>Avantage détecté :</strong> Notre modèle probabiliste intègre les données de <span class="highlight">forme récente, compositions, historique head-to-head et conditions météo.</span> Il estime la probabilité de victoire d'Arsenal à <span class="highlight">56%</span>, soit 6 points de plus que l'implicite bookmaker (50%). Cet écart génère un Expected Value positif de <span class="highlight">+12.3%</span> — c'est un signal fort.
+            <br><br>
+            <strong>Points d'attention :</strong> L'absence possible de <em>Gabriel Magalhães</em> en défense et la forme irrégulière de Havertz en pointe sont des facteurs de risque à surveiller jusqu'à l'annonce des compositions officielles (~1h avant le match). La cote pourrait baisser si Arsenal annonce une compo solide.
+            <br><br>
+            <strong>Conclusion :</strong> <span class="highlight">Value bet confirmé</span> sur la victoire d'Arsenal. Mise recommandée selon critère de Kelly : 6.2% de votre bankroll. Surveiller les dropping odds — si la cote descend sous 1.75, la value disparaît.
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  function showPage(id) {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    window.scrollTo(0, 0);
+
+    // Nav active state
+    document.querySelectorAll('.nav-btn').forEach(btn => {
+      btn.classList.remove('active');
+    });
+    if (id === 'agenda') {
+      document.querySelectorAll('.nav-btn').forEach(btn => {
+        if (btn.textContent.trim().toLowerCase() === 'agenda') btn.classList.add('active');
+      });
+    } else if (id === 'stats') {
+      document.querySelectorAll('.nav-btn').forEach(btn => {
+        if (btn.textContent.trim().toLowerCase() === 'statistiques') btn.classList.add('active');
+      });
+    }
+  }
+
+  // Match cards → analysis page
+  document.querySelectorAll('.match-card').forEach(card => {
+    card.addEventListener('click', function() {
+      showPage('analysis');
+    });
+  });
+
+  // Filter chips toggle
+  document.querySelectorAll('.filter-chip').forEach(chip => {
+    chip.addEventListener('click', function(e) {
+      e.stopPropagation();
+      const group = this.closest('.filter-bar, .page-header');
+      group.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+      this.classList.add('active');
+    });
+  });
+</script>
+
+<!-- RockAI API Integration -->
+<script src="rockai-frontend.js"></script>
+
+</body>
+</html>
