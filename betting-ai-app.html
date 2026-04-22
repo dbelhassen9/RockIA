@@ -1806,46 +1806,515 @@
 </div>
 
 <script>
-  function showPage(id) {
-    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    document.getElementById(id).classList.add('active');
-    window.scrollTo(0, 0);
+// ═══════════════════════════════════════════════════════
+// ROCKAI v3 — Méthode Pinnacle (identique à StatsnBet)
+// ═══════════════════════════════════════════════════════
+const API_BASE = 'http://localhost:8000';
 
-    // Nav active state
-    document.querySelectorAll('.nav-btn').forEach(btn => {
-      btn.classList.remove('active');
+// ── Auth helpers ──────────────────────────────────────
+function getToken() { return localStorage.getItem('rockai_token'); }
+function setToken(t) { localStorage.setItem('rockai_token', t); }
+function clearToken() { localStorage.removeItem('rockai_token'); localStorage.removeItem('rockai_user'); }
+
+function authHeaders() {
+  return { 'Content-Type': 'application/json', 'Authorization': `Bearer ${getToken()}` };
+}
+
+async function apiCall(path, options = {}) {
+  const r = await fetch(API_BASE + path, { headers: authHeaders(), ...options });
+  if (r.status === 401) { clearToken(); showPage('login'); throw new Error('Session expirée'); }
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.detail || 'Erreur API');
+  return data;
+}
+
+// ── Toast notification ────────────────────────────────
+function showToast(msg, type = 'info') {
+  const t = document.createElement('div');
+  const colors = { info: '#00d4dc', error: '#ff4757', success: '#00d4dc' };
+  t.style.cssText = `position:fixed;bottom:2rem;right:2rem;z-index:9999;padding:.85rem 1.4rem;
+    background:#0d1318;border:1px solid ${colors[type]};border-radius:10px;
+    color:#e8edf2;font-family:'DM Mono',monospace;font-size:.8rem;
+    box-shadow:0 0 30px rgba(0,0,0,.5);animation:fadeIn .3s ease;`;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3500);
+}
+
+// ── Navigation ────────────────────────────────────────
+function showPage(id) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  window.scrollTo(0, 0);
+  document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
+  if (id === 'agenda') {
+    document.querySelectorAll('.nav-btn').forEach(b => { if (b.textContent.trim().toLowerCase() === 'agenda') b.classList.add('active'); });
+    loadMatches();
+  } else if (id === 'stats') {
+    document.querySelectorAll('.nav-btn').forEach(b => { if (b.textContent.trim().toLowerCase() === 'statistiques') b.classList.add('active'); });
+    loadStats();
+  }
+}
+
+// ── Login ─────────────────────────────────────────────
+async function handleLogin() {
+  const email    = document.querySelector('input[type="email"]').value.trim();
+  const password = document.querySelector('input[type="password"]').value;
+  if (!email || !password) { showToast('Remplis email et mot de passe', 'error'); return; }
+
+  const btn = document.querySelector('.btn-primary');
+  btn.textContent = 'Connexion...'; btn.disabled = true;
+
+  try {
+    // Essaie login, si 401 → inscrit automatiquement
+    let data;
+    try {
+      data = await fetch(API_BASE + '/auth/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      if (data.status === 401) {
+        // Compte inexistant → auto-register
+        const reg = await fetch(API_BASE + '/auth/register', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password, full_name: email.split('@')[0] })
+        });
+        data = await reg.json();
+      } else {
+        data = await data.json();
+      }
+    } catch(e) { throw new Error('Impossible de joindre le serveur'); }
+
+    if (!data.access_token) throw new Error(data.detail || 'Erreur de connexion');
+    setToken(data.access_token);
+
+    // Charge le profil
+    const user = await apiCall('/user/me');
+    localStorage.setItem('rockai_user', JSON.stringify(user));
+    updateNavUser(user);
+
+    showToast('Connecté ! Bienvenue ' + user.full_name, 'success');
+    showPage('agenda');
+  } catch(e) {
+    showToast(e.message, 'error');
+  } finally {
+    btn.textContent = 'Accéder à la plateforme →'; btn.disabled = false;
+  }
+}
+
+function updateNavUser(user) {
+  document.querySelectorAll('.nav-user span:first-of-type').forEach(el => { el.textContent = user.full_name; });
+  document.querySelectorAll('.avatar').forEach(el => {
+    el.textContent = user.full_name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
+  });
+  document.querySelectorAll('.plan-badge').forEach(el => {
+    el.textContent = user.plan === 'pro' ? '⭐ Pro' : `🎯 ${user.credits} crédits`;
+  });
+}
+
+// ── Matches (Agenda) ──────────────────────────────────
+async function loadMatches() {
+  const list = document.querySelector('#agenda .matches-list');
+  if (!list) return;
+  list.innerHTML = '<div style="text-align:center;padding:2rem;font-family:var(--font-mono);color:var(--text-muted);font-size:.8rem;">Chargement des matchs...</div>';
+
+  try {
+    const data = await apiCall('/matches');
+    renderMatches(data.matches, data.mode);
+  } catch(e) {
+    list.innerHTML = `<div style="text-align:center;padding:2rem;color:var(--red);font-family:var(--font-mono);font-size:.8rem;">❌ ${e.message}</div>`;
+  }
+}
+
+
+function renderMatches(matches, mode) {
+  const agenda = document.querySelector('#agenda .page-content');
+  agenda.querySelectorAll('.date-label, .matches-list').forEach(el => el.remove());
+
+  const sub        = agenda.querySelector('.page-header p');
+  const total      = matches.length;
+  const valueCnt   = matches.filter(m => m.has_value).length;
+  const strongCnt  = matches.filter(m => m.is_strong).length;
+  if (sub) sub.textContent =
+    `// ${total} matchs · ${valueCnt} value bets · ${strongCnt} signaux forts · ` +
+    `${mode === 'live' ? '🔴 live' : '🟡 démo'} · ` +
+    new Date().toLocaleTimeString('fr-FR', {hour:'2-digit',minute:'2-digit'});
+
+  // Groupe par date
+  const byDate = {};
+  matches.forEach(m => {
+    const d   = new Date(m.commence_time);
+    const now = new Date();
+    const isToday    = d.toDateString() === now.toDateString();
+    const isTomorrow = d.toDateString() === new Date(now.getTime()+86400000).toDateString();
+    const key = isToday    ? `Aujourd'hui — ${d.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'})}`
+              : isTomorrow ? `Demain — ${d.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'})}`
+              : d.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'});
+    if (!byDate[key]) byDate[key] = [];
+    byDate[key].push(m);
+  });
+
+  Object.entries(byDate).forEach(([date, dayMatches]) => {
+    const lbl = document.createElement('div');
+    lbl.className   = 'date-label';
+    lbl.textContent = date.charAt(0).toUpperCase() + date.slice(1);
+    agenda.appendChild(lbl);
+
+    const list = document.createElement('div');
+    list.className  = 'matches-list';
+
+    dayMatches.forEach(m => {
+      const time   = new Date(m.commence_time).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+      const ev     = m.best_ev_pct;
+      const isVal  = m.has_value;
+      const strong = m.is_strong;
+
+      // Badge
+      let badgeClass = 'neutral', badgeText = 'Pas de value';
+      if (strong)     { badgeClass = 'hot'; badgeText = '🔥 Value Bet'; }
+      else if (isVal) { badgeClass = 'hot'; badgeText = 'Value Bet ↑'; }
+
+      // EV display
+      const evHtml = isVal
+        ? `<div class="ev-value">+${ev}%</div>
+           <div class="ev-label">EV · ${m.best_bookmaker || ''}</div>`
+        : `<div class="ev-label" style="margin-top:.5rem;font-size:.7rem">Pas de value</div>`;
+
+      // Cotes Pinnacle (référence)
+      const h  = m.odds_home ? m.odds_home.toFixed(2) : '—';
+      const d2 = m.odds_draw ? m.odds_draw.toFixed(2) : '—';
+      const a  = m.odds_away ? m.odds_away.toFixed(2) : '—';
+
+      const card = document.createElement('div');
+      card.className = 'match-card' + (strong ? ' value' : '');
+      card.dataset.matchId = m.match_id;
+      card.innerHTML = `
+        <div class="match-meta">
+          <div class="match-league">${m.league}</div>
+          <div class="match-time">${time}</div>
+        </div>
+        <div class="match-center">
+          <div class="team">
+            <div class="team-icon">${teamEmoji(m.team_home)}</div>
+            <div class="team-name">${m.team_home}</div>
+          </div>
+          <div class="vs-block">
+            <div class="vs-text">VS</div>
+            <div class="match-odds-row">
+              <div class="odd-pill">${h}</div>
+              <div class="odd-pill">${d2}</div>
+              <div class="odd-pill">${a}</div>
+            </div>
+          </div>
+          <div class="team">
+            <div class="team-icon">${teamEmoji(m.team_away)}</div>
+            <div class="team-name">${m.team_away}</div>
+          </div>
+        </div>
+        <div class="match-right">
+          <div class="value-badge ${badgeClass}">${badgeText}</div>
+          ${evHtml}
+        </div>`;
+
+      card.addEventListener('click', () => openMatchDetail(m));
+      list.appendChild(card);
     });
-    if (id === 'agenda') {
-      document.querySelectorAll('.nav-btn').forEach(btn => {
-        if (btn.textContent.trim().toLowerCase() === 'agenda') btn.classList.add('active');
-      });
-    } else if (id === 'stats') {
-      document.querySelectorAll('.nav-btn').forEach(btn => {
-        if (btn.textContent.trim().toLowerCase() === 'statistiques') btn.classList.add('active');
-      });
-    }
+
+    agenda.appendChild(list);
+  });
+}
+
+// ── Détail match + value bets Pinnacle ───────────────────────────────────────
+function openMatchDetail(match) {
+  showPage('analysis');
+
+  // Header
+  document.querySelector('.match-title-block h1').textContent =
+    `${match.team_home} vs ${match.team_away}`;
+  document.querySelector('.match-title-block p').textContent =
+    `${match.league} · ${new Date(match.commence_time)
+      .toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'})}`;
+
+  // Teams
+  document.querySelector('.team-hero-block:first-child .team-hero-name').textContent = match.team_home;
+  document.querySelector('.team-hero-block:last-child .team-hero-name').textContent  = match.team_away;
+  document.querySelector('.vs-hero-time').textContent =
+    new Date(match.commence_time).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+
+  // Cotes Pinnacle dans les odd-blocks
+  const oddBlocks = document.querySelectorAll('.odd-block');
+  const pinnacleOdds = [
+    {val: match.odds_home, label: '1 — DOM'},
+    {val: match.odds_draw, label: 'X — Nul'},
+    {val: match.odds_away, label: '2 — EXT'},
+  ];
+  oddBlocks.forEach((b, i) => {
+    b.querySelector('.odd-val').textContent = pinnacleOdds[i].val
+      ? pinnacleOdds[i].val.toFixed(2) : 'N/D';
+    b.querySelector('.odd-lbl').textContent = pinnacleOdds[i].label;
+    b.className = 'odd-block';
+  });
+
+  // Badge global
+  const badge = document.querySelector('.analysis-header .value-badge');
+  if (badge) {
+    if (match.is_strong)     { badge.className = 'value-badge hot';     badge.textContent = '🔥 Value Bet Détecté'; }
+    else if (match.has_value){ badge.className = 'value-badge hot';     badge.textContent = 'Value Bet ↑'; }
+    else                     { badge.className = 'value-badge neutral'; badge.textContent = '— Pas de value'; }
   }
 
-  // Match cards → analysis page
-  document.querySelectorAll('.match-card').forEach(card => {
-    card.addEventListener('click', function() {
-      showPage('analysis');
-    });
-  });
+  // Verdict (meilleure value bet)
+  if (match.value_bets && match.value_bets.length > 0) {
+    const best = match.value_bets[0];
+    const vb = document.querySelector('.verdict-bet');
+    if (vb) vb.textContent = `✓ ${best.bet_label}`;
+    const evBig = document.querySelector('.ev-big');
+    if (evBig) evBig.textContent = `+${best.ev_pct}%`;
+    const sub = document.querySelector('.verdict-sub');
+    if (sub) sub.innerHTML =
+      `${best.bookmaker} · Cote ${best.odds.toFixed(2)}<br>Fair odds (Pinnacle) : ${best.fair_odds.toFixed(2)}`;
+    const kellyRows = document.querySelectorAll('.kelly-row');
+    if (kellyRows[0]) kellyRows[0].querySelector('.kelly-val').textContent = `${best.kelly_pct}%`;
+    if (kellyRows[1]) kellyRows[1].querySelector('.kelly-val').textContent = `${best.stake_1000}€ / 1000€`;
+    if (kellyRows[2]) kellyRows[2].querySelector('.kelly-val').textContent =
+      `${(best.odds * best.stake_1000).toFixed(2)}€`;
+  } else {
+    const vb = document.querySelector('.verdict-bet');
+    if (vb) vb.textContent = '✗ Aucune value';
+    const evBig = document.querySelector('.ev-big');
+    if (evBig) { evBig.textContent = '0%'; evBig.style.color = 'var(--text-muted)'; }
+  }
 
-  // Filter chips toggle
-  document.querySelectorAll('.filter-chip').forEach(chip => {
-    chip.addEventListener('click', function(e) {
-      e.stopPropagation();
-      const group = this.closest('.filter-bar, .page-header');
-      group.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
-      this.classList.add('active');
-    });
+  // Zone analyse — tableau des value bets
+  renderValueBetsTable(match);
+}
+
+function renderValueBetsTable(match) {
+  const aiCard = document.querySelector('.ai-analysis-card');
+  if (!aiCard) return;
+
+  aiCard.querySelector('.card-title').textContent = 'Value Bets — Méthode Pinnacle';
+  aiCard.querySelector('.card-sub').textContent   =
+    `// ${(match.value_bets||[]).length} opportunité(s) trouvée(s) · EV = (cote bk ÷ fair odds) - 1`;
+
+  const thinking = aiCard.querySelector('.ai-thinking');
+  if (thinking) thinking.style.display = 'none';
+
+  const textEl = aiCard.querySelector('.ai-text');
+
+  if (!match.value_bets || match.value_bets.length === 0) {
+    textEl.innerHTML = `
+      <div style="padding:1.5rem;text-align:center;font-family:var(--font-mono);font-size:.8rem;color:var(--text-muted);">
+        ❌ Aucune value bet sur ce match<br><br>
+        <span style="color:var(--text-dim);font-size:.75rem;">
+          Les cotes de tous les bookmakers sont alignées avec Pinnacle.<br>
+          Le marché est efficient — passe ton chemin sur ce match.
+        </span>
+      </div>`;
+    return;
+  }
+
+  textEl.innerHTML = `
+    <div style="overflow-x:auto;margin-bottom:1.5rem;">
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="border-bottom:1px solid var(--border);">
+            ${['Pari','Bookmaker','Cote','Fair Odds (Pinnacle)','EV %','Kelly %','Mise / 1000€']
+              .map(h => `<th style="padding:.5rem .75rem;font-family:var(--font-mono);
+                font-size:.6rem;text-transform:uppercase;letter-spacing:.08em;
+                color:var(--text-muted);text-align:${h==='Pari'||h==='Bookmaker'?'left':'center'};">${h}</th>`)
+              .join('')}
+          </tr>
+        </thead>
+        <tbody>
+          ${(match.value_bets || []).map((vb, i) => `
+            <tr style="border-bottom:1px solid var(--border);
+                       background:${i===0?'rgba(0,212,220,0.03)':''};
+                       cursor:pointer;transition:background .15s;"
+                onmouseover="this.style.background='var(--surface2)'"
+                onmouseout="this.style.background='${i===0?'rgba(0,212,220,0.03)':''}'"
+                title="Clique pour noter ce pari">
+              <td style="padding:.8rem .75rem;">
+                <div style="font-family:var(--font-display);font-weight:700;font-size:.85rem;">
+                  ${vb.bet_label}
+                  ${vb.is_strong
+                    ? '<span style="margin-left:.4rem;font-size:.58rem;padding:.15rem .4rem;background:var(--accent-dim);color:var(--accent);border-radius:3px;font-family:var(--font-mono);letter-spacing:.05em;">FORT</span>'
+                    : ''}
+                </div>
+              </td>
+              <td style="padding:.8rem .75rem;font-family:var(--font-mono);font-size:.75rem;color:var(--text-dim);">
+                ${vb.bookmaker}
+              </td>
+              <td style="padding:.8rem .75rem;text-align:center;font-family:var(--font-display);font-weight:700;font-size:1rem;">
+                ${vb.odds.toFixed(2)}
+              </td>
+              <td style="padding:.8rem .75rem;text-align:center;font-family:var(--font-mono);font-size:.8rem;color:var(--text-muted);">
+                ${vb.fair_odds.toFixed(2)}
+              </td>
+              <td style="padding:.8rem .75rem;text-align:center;font-family:var(--font-display);font-weight:800;font-size:1.05rem;color:var(--accent);">
+                +${vb.ev_pct}%
+              </td>
+              <td style="padding:.8rem .75rem;text-align:center;font-family:var(--font-mono);font-size:.8rem;color:var(--text-dim);">
+                ${vb.kelly_pct}%
+              </td>
+              <td style="padding:.8rem .75rem;text-align:right;font-family:var(--font-display);font-weight:700;font-size:.95rem;color:var(--accent);">
+                ${vb.stake_1000}€
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Explications pédagogiques -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-top:.5rem;">
+      <div style="padding:1rem;background:var(--surface2);border-radius:8px;border:1px solid var(--border);">
+        <div style="font-family:var(--font-mono);font-size:.62rem;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);margin-bottom:.5rem;">📐 Formule EV</div>
+        <div style="font-family:var(--font-mono);font-size:.75rem;color:var(--text-dim);line-height:1.6;">
+          EV = (cote bk ÷ fair odds) − 1<br>
+          <span style="color:var(--accent);">Si EV > 0 → value bet ✓</span>
+        </div>
+      </div>
+      <div style="padding:1rem;background:var(--surface2);border-radius:8px;border:1px solid var(--border);">
+        <div style="font-family:var(--font-mono);font-size:.62rem;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);margin-bottom:.5rem;">💰 Mise Kelly</div>
+        <div style="font-family:var(--font-mono);font-size:.75rem;color:var(--text-dim);line-height:1.6;">
+          Demi-Kelly = mise optimale<br>
+          <span style="color:var(--accent);">Maximise la croissance long terme</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Projection -->
+    <div style="margin-top:.75rem;padding:1rem 1.25rem;background:rgba(0,212,220,0.05);
+                border:1px solid var(--border-accent);border-radius:8px;">
+      <div style="font-family:var(--font-mono);font-size:.62rem;text-transform:uppercase;
+                  letter-spacing:.08em;color:var(--accent);margin-bottom:.4rem;">📈 Projection long terme</div>
+      <div style="font-family:var(--font-mono);font-size:.75rem;color:var(--text-dim);line-height:1.8;">
+        Sur 500 paris similaires avec EV moyen +${(match.value_bets[0]?.ev_pct||5)}% :<br>
+        <span style="color:var(--text);">Bankroll 1000€ × Kelly ${match.value_bets[0]?.kelly_pct||2}% × 500 paris</span><br>
+        <span style="color:var(--accent);font-size:.85rem;font-family:var(--font-display);font-weight:700;">
+          → Profit théorique : +${Math.round(1000 * Math.pow(1 + (match.value_bets[0]?.kelly_pct||2)/100 * (match.value_bets[0]?.ev_pct||5)/100, 500) - 1000).toLocaleString()}€
+        </span>
+      </div>
+    </div>`;
+}
+
+function teamEmoji(name) {
+  const map = {
+    'Arsenal':'🔴','Chelsea':'🔵','Liverpool':'🔴','Man City':'🔵','Man United':'🔴',
+    'Tottenham':'⚪','Newcastle':'⚫','Aston Villa':'🟣','West Ham':'🔵','Brighton':'🔵',
+    'PSG':'🔵','Lyon':'🔴','Marseille':'🔵','Monaco':'🔴','Lille':'🔴','Nice':'🔴',
+    'Bayern':'🔴','Dortmund':'🟡','Leipzig':'⚪','Leverkusen':'⚫','Frankfurt':'⚫',
+    'Real Madrid':'⚪','Barcelona':'🔵','Atletico':'🔴','Sevilla':'⚪','Villarreal':'🟡',
+    'Inter':'⚫','Juventus':'⚪','Napoli':'🔵','Milan':'🔴','Roma':'🟡','Lazio':'🔵',
+    'Ajax':'🔴','PSV':'🔴','Feyenoord':'🔴','Sporting':'🟢','Porto':'🔵','Benfica':'🔴',
+    'Lakers':'🟣','Celtics':'🍀','Warriors':'🟡','Bulls':'🔴','Heat':'🔴','Nets':'⚫',
+    'Yankees':'⚾','Dodgers':'🔵',
+  };
+  for (const [k,v] of Object.entries(map)) { if (name && name.includes(k)) return v; }
+  return '⚽';
+}
+
+
+// ── Stats ─────────────────────────────────────────────
+async function loadStats() {
+  try {
+    const s = await apiCall('/stats');
+    const kpis = document.querySelectorAll('.kpi-val');
+    if (kpis[0]) kpis[0].textContent = `${s.roi >= 0 ? '+' : ''}${s.roi}%`;
+    if (kpis[1]) kpis[1].textContent = `${s.win_rate}%`;
+    if (kpis[2]) kpis[2].textContent = `${s.total_profit >= 0 ? '+' : ''}${s.total_profit}€`;
+    if (kpis[3]) kpis[3].textContent = s.total_bets;
+
+    // Trends sous les KPIs
+    const trends = document.querySelectorAll('.kpi-trend');
+    if (trends[0]) trends[0].innerHTML = `EV moyen : <span class="up">+${s.avg_ev_pct}%</span>`;
+    if (trends[1]) trends[1].innerHTML = `${s.won} ✓  ${s.lost} ✗  ${s.pending} ⏳`;
+    if (trends[2] && s.projection_500_bets)
+      trends[2].innerHTML = `Projection 500 paris : <span class="up">+${s.projection_500_bets.toLocaleString()}€</span>`;
+    if (trends[3]) trends[3].innerHTML = `Bankroll : <span class="up">${(s.bankroll||1000).toLocaleString()}€</span>`;
+
+    // Répartition par sport
+    const distRows = document.querySelectorAll('.dist-row');
+    if (s.by_sport && s.by_sport.length > 0) {
+      s.by_sport.slice(0,6).forEach((sp, i) => {
+        if (!distRows[i]) return;
+        const total = s.total_bets || 1;
+        const pct   = Math.round((sp.wins / (sp.bets||1)) * 100);
+        distRows[i].querySelector('.dist-label').textContent = sp.sport || '—';
+        distRows[i].querySelector('.dist-bar-fill').style.width = `${pct}%`;
+        distRows[i].querySelector('.dist-pct').textContent = `${pct}%`;
+      });
+    }
+
+    // Historique paris
+    const bets = await apiCall('/bets');
+    renderBetsTable(bets.bets);
+  } catch(e) {
+    showToast('Erreur stats : ' + e.message, 'error');
+  }
+}
+
+function renderBetsTable(bets) {
+  const tbody = document.querySelector('.bet-table tbody');
+  if (!tbody) return;
+  if (!bets || !bets.length) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:2rem;
+      font-family:var(--font-mono);font-size:.78rem;color:var(--text-muted);">
+      Aucun pari enregistré pour l'instant</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = bets.slice(0, 10).map(b => {
+    const evPct  = b.ev ? `+${(b.ev*100).toFixed(1)}%` : '—';
+    const label  = b.bet_label || (b.bet_on === 'home' ? `1 ${b.team_home}` :
+                   b.bet_on === 'away' ? `2 ${b.team_away}` : 'X Nul');
+    const profit = b.profit || 0;
+    return `
+    <tr>
+      <td>
+        <div class="bet-team">${b.team_home} vs ${b.team_away}</div>
+        <div class="bet-league-tag">${b.sport || b.league || ''} · ${new Date(b.placed_at).toLocaleDateString('fr-FR')}</div>
+      </td>
+      <td style="font-family:var(--font-mono);font-size:.78rem;">${label}</td>
+      <td style="font-family:var(--font-mono);font-size:.78rem;">${b.odds || '—'}</td>
+      <td style="color:var(--accent);font-family:var(--font-mono);font-size:.78rem;">${evPct}</td>
+      <td style="font-family:var(--font-mono);font-size:.78rem;">${b.stake}€</td>
+      <td><span class="result-badge ${b.result === 'won' ? 'win' : b.result === 'lost' ? 'loss' : 'pending'}">
+        ${b.result === 'won' ? 'Gagné' : b.result === 'lost' ? 'Perdu' : 'En cours'}
+      </span></td>
+      <td class="${profit >= 0 ? 'pnl-pos' : 'pnl-neg'}">${profit >= 0 ? '+' : ''}${profit}€</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Filter chips ──────────────────────────────────────
+document.querySelectorAll('.filter-chip').forEach(chip => {
+  chip.addEventListener('click', function(e) {
+    e.stopPropagation();
+    const group = this.closest('.filter-bar, .page-header');
+    group.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+    this.classList.add('active');
   });
+});
+
+// ── Login button ──────────────────────────────────────
+document.querySelector('.btn-primary')?.addEventListener('click', handleLogin);
+document.querySelector('.btn-google')?.addEventListener('click', handleLogin);
+document.querySelector('input[type="password"]')?.addEventListener('keypress', e => {
+  if (e.key === 'Enter') handleLogin();
+});
+
+// ── Init ──────────────────────────────────────────────
+(function init() {
+  const token = getToken();
+  if (token) {
+    const user = JSON.parse(localStorage.getItem('rockai_user') || 'null');
+    if (user) updateNavUser(user);
+    showPage('agenda');
+  } else {
+    showPage('login');
+  }
+})();
 </script>
-
-<!-- RockAI API Integration -->
-<script src="rockai-frontend.js"></script>
 
 </body>
 </html>

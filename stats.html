@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RockAI — Statistiques</title>
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<nav>
+  <a href="agenda.html" class="nav-logo">Rock<span>AI</span> <div class="nav-dot"></div></a>
+  <div class="nav-links">
+    <a href="agenda.html" class="nav-btn">⚡ Agenda</a>
+    <a href="stats.html"  class="nav-btn active">📊 Statistiques</a>
+    <a href="profil.html" class="nav-btn">👤 Profil</a>
+  </div>
+  <div class="nav-user">
+    <a href="profil.html" class="avatar" title="Profil">??</a>
+    <span class="nav-user-name">—</span>
+    <span class="plan-badge">—</span>
+  </div>
+</nav>
+
+<div class="main-layout">
+  <div class="page-content">
+
+    <div class="page-header" style="display:flex;align-items:baseline;gap:1rem;flex-wrap:wrap;">
+      <div>
+        <h1>Mes statistiques</h1>
+        <p id="stats-sub">// Chargement...</p>
+      </div>
+      <div style="margin-left:auto;display:flex;gap:.4rem;">
+        <button class="filter-chip active" data-period="3m">3 mois</button>
+        <button class="filter-chip" data-period="6m">6 mois</button>
+        <button class="filter-chip" data-period="1y">1 an</button>
+        <button class="filter-chip" data-period="all">Tout</button>
+      </div>
+    </div>
+
+    <!-- KPIs -->
+    <div class="stats-grid">
+      <div class="kpi-card accent-green">
+        <div class="kpi-icon">📈</div>
+        <div class="kpi-val green" id="kpi-roi">—</div>
+        <div class="kpi-label">ROI Global</div>
+        <div class="kpi-trend" id="kpi-roi-trend">—</div>
+      </div>
+      <div class="kpi-card accent-blue">
+        <div class="kpi-icon">🎯</div>
+        <div class="kpi-val blue" id="kpi-winrate">—</div>
+        <div class="kpi-label">Taux de réussite</div>
+        <div class="kpi-trend" id="kpi-winrate-trend">—</div>
+      </div>
+      <div class="kpi-card accent-gold">
+        <div class="kpi-icon">💰</div>
+        <div class="kpi-val gold" id="kpi-profit">—</div>
+        <div class="kpi-label">Profit net</div>
+        <div class="kpi-trend" id="kpi-profit-trend">—</div>
+      </div>
+      <div class="kpi-card accent-red">
+        <div class="kpi-icon">📊</div>
+        <div class="kpi-val" id="kpi-bets" style="color:var(--text)">—</div>
+        <div class="kpi-label">Paris placés</div>
+        <div class="kpi-trend" id="kpi-bets-detail">—</div>
+      </div>
+    </div>
+
+    <!-- Chart + Distribution -->
+    <div class="stats-bottom">
+      <!-- ROI par mois -->
+      <div class="card">
+        <div class="card-title">Évolution du ROI</div>
+        <div class="card-sub">// bénéfice mensuel en €</div>
+        <div class="roi-chart" id="roi-chart">
+          <div class="chart-zero"></div>
+          <div class="loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
+            <div class="loading-dots"><span></span><span></span><span></span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Distribution par sport -->
+      <div class="card">
+        <div class="card-title">Répartition par sport</div>
+        <div class="card-sub">// paris gagnants / total</div>
+        <div id="sport-dist">
+          <div class="loading"><div class="loading-dots"><span></span><span></span><span></span></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Historique paris -->
+    <div class="card">
+      <div class="card-title">Historique des paris</div>
+      <div class="card-sub">// 20 dernières opérations</div>
+      <div id="bets-table-wrap">
+        <div class="loading"><div class="loading-dots"><span></span><span></span><span></span></div></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script src="js/shared.js"></script>
+<script src="js/stats.js"></script>
+<script>
+  initPage().then(() => loadStats());
+
+  document.querySelectorAll('[data-period]').forEach(btn => {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('[data-period]').forEach(b => b.classList.remove('active'));
+      this.classList.add('active');
+    });
+  });
+</script>
+</body>
+</html>
