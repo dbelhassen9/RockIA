@@ -36,26 +36,42 @@ PINNACLE_MARGIN   = 0.02
 EV_MIN_DISPLAY    = 0.02   # 2%  → apparaît dans l'agenda
 EV_MIN_ALERT      = 0.05   # 5%  → badge "VALUE BET" rouge
 # Cache
-ODDS_CACHE_SEC    = 180    # 3 min (cotes changent vite)
+ODDS_CACHE_SEC    = 600    # 10 min en mémoire
+DB_CACHE_HOURS    = 6      # 6h en base SQLite
 
 # Ligues supportées (the-odds-api.com sport keys)
 LEAGUES = {
+    # 5 grandes ligues
     "soccer_france_ligue_one":       "🇫🇷 Ligue 1",
     "soccer_epl":                    "🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League",
     "soccer_spain_la_liga":          "🇪🇸 La Liga",
     "soccer_germany_bundesliga":     "🇩🇪 Bundesliga",
     "soccer_italy_serie_a":          "🇮🇹 Serie A",
-    "soccer_netherlands_eredivisie": "🇳🇱 Eredivisie",
-    "soccer_portugal_primeira_liga": "🇵🇹 Primeira Liga",
+    # 3 compétitions européennes
     "soccer_uefa_champs_league":     "🏆 Champions League",
     "soccer_uefa_europa_league":     "⚽ Europa League",
+    "soccer_uefa_conference_league": "🔵 Conference League",
+    # Sports supplémentaires (accessibles via ?leagues=...)
+    "soccer_netherlands_eredivisie": "🇳🇱 Eredivisie",
+    "soccer_portugal_primeira_liga": "🇵🇹 Primeira Liga",
     "basketball_nba":                "🏀 NBA",
     "basketball_euroleague":         "🏀 Euroleague",
     "icehockey_nhl":                 "🏒 NHL",
     "baseball_mlb":                  "⚾ MLB",
-    "tennis_atp_french_open":        "🎾 Roland Garros ATP",
     "mma_mixed_martial_arts":        "🥊 MMA/UFC",
 }
+
+# Ligues chargées par défaut (sans paramètre ?leagues=)
+DEFAULT_LEAGUES = [
+    "soccer_france_ligue_one",
+    "soccer_epl",
+    "soccer_spain_la_liga",
+    "soccer_germany_bundesliga",
+    "soccer_italy_serie_a",
+    "soccer_uefa_champs_league",
+    "soccer_uefa_europa_league",
+    "soccer_uefa_conference_league",
+]
 
 logging.basicConfig(level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(message)s", datefmt="%H:%M:%S")
@@ -120,6 +136,13 @@ def init_db():
         profit         REAL DEFAULT 0,
         placed_at      TEXT DEFAULT (datetime('now')),
         match_date     TEXT
+    );
+    CREATE TABLE IF NOT EXISTS matches_cache (
+        sport_key    TEXT NOT NULL,
+        match_id     TEXT NOT NULL,
+        data_json    TEXT NOT NULL,
+        fetched_at   TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY (sport_key, match_id)
     );
     """)
     c.commit()
@@ -362,43 +385,86 @@ def find_value_bets(event: dict, sport_key: str) -> List[Dict]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def fetch_league(session: aiohttp.ClientSession, sport_key: str) -> List[Dict]:
-    """Fetch les cotes pour une ligue — TOUS les bookmakers en une requête"""
+    """
+    Fetch les cotes pour une ligue avec 3 niveaux de cache :
+    1. Cache mémoire Python (10 min) — ultra rapide
+    2. Cache SQLite (6h) — survit aux redémarrages
+    3. Appel API réel — seulement si les deux caches sont expirés
+    """
+    # Niveau 1 : cache mémoire
     ck = f"raw:{sport_key}"
     cached = cache_get(ck)
     if cached is not None:
+        logger.debug(f"[MEM CACHE] {sport_key}")
         return cached
 
-    if not ODDS_API_KEY:
-        return _demo_events(sport_key)
+    # Niveau 2 : cache SQLite
+    try:
+        db = get_db()
+        rows = db.execute("""
+            SELECT data_json FROM matches_cache
+            WHERE sport_key = ?
+            AND fetched_at > datetime('now', ?)
+            LIMIT 1
+        """, (sport_key, f"-{DB_CACHE_HOURS} hours")).fetchone()
+        db.close()
 
-    # On demande TOUS les bookmakers (pas de filtre) pour avoir Pinnacle + les autres
+        if rows:
+            data = json.loads(rows["data_json"])
+            cache_set(ck, data, ODDS_CACHE_SEC)  # recharge le cache mémoire
+            logger.info(f"[DB CACHE] {sport_key} — {len(data)} événements")
+            return data
+    except Exception as e:
+        logger.error(f"DB cache read error: {e}")
+
+    # Niveau 3 : pas de clé API → données démo
+    if not ODDS_API_KEY:
+        data = _demo_events(sport_key)
+        cache_set(ck, data, ODDS_CACHE_SEC)
+        return data
+
+    # Niveau 4 : appel API réel
     url = (
         f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds"
         f"?apiKey={ODDS_API_KEY}"
-        f"&regions=eu,uk"           # bookmakers européens + UK (Pinnacle est là)
-        f"&markets=h2h"             # 1X2 pour commencer
+        f"&regions=eu,uk"
+        f"&markets=h2h"
         f"&oddsFormat=decimal"
         f"&dateFormat=iso"
     )
-
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=12)) as r:
             remaining = r.headers.get("x-requests-remaining", "?")
-            logger.info(f"OddsAPI [{sport_key}] → {r.status} | quota restant: {remaining}")
+            used      = r.headers.get("x-requests-used", "?")
+            logger.info(f"[API] {sport_key} → {r.status} | used:{used} remaining:{remaining}")
 
             if r.status == 401:
                 raise HTTPException(500, "Clé OddsAPI invalide")
             if r.status == 422:
-                return []  # sport hors saison
+                return []   # sport hors saison — ne pas cacher
             if r.status == 429:
-                logger.warning("Rate limit OddsAPI !")
+                logger.warning("Rate limit OddsAPI — utilisation du cache démo")
                 await asyncio.sleep(3)
-                return []
+                return _demo_events(sport_key)
             if r.status != 200:
                 return []
 
             data = await r.json()
+
+            # Sauvegarde en cache mémoire ET SQLite
             cache_set(ck, data, ODDS_CACHE_SEC)
+            try:
+                db = get_db()
+                db.execute("""
+                    INSERT OR REPLACE INTO matches_cache (sport_key, match_id, data_json, fetched_at)
+                    VALUES (?, ?, ?, datetime('now'))
+                """, (sport_key, sport_key, json.dumps(data)))
+                db.commit()
+                db.close()
+                logger.info(f"[DB SAVE] {sport_key} — {len(data)} matchs sauvegardés")
+            except Exception as e:
+                logger.error(f"DB cache write error: {e}")
+
             return data
 
     except asyncio.TimeoutError:
@@ -790,7 +856,7 @@ async def get_matches(
     - La meilleure value bet trouvée (bookmaker, cote, EV%, mise Kelly)
     - La liste complète de toutes les value bets du match
     """
-    target = [l.strip() for l in leagues.split(",")] if leagues else list(LEAGUES.keys())
+    target = [l.strip() for l in leagues.split(",")] if leagues else DEFAULT_LEAGUES
     # Limite aux ligues connues
     target = [l for l in target if l in LEAGUES]
 
@@ -1005,6 +1071,44 @@ async def get_stats(user=Depends(get_user)):
 @app.get("/leagues")
 async def get_leagues():
     return {"leagues": [{"key": k, "label": v} for k, v in LEAGUES.items()]}
+
+@app.get("/cache/status")
+async def cache_status(user=Depends(get_user)):
+    """Affiche l'état du cache SQLite — quels sports sont en cache et depuis quand"""
+    db = get_db()
+    rows = db.execute("""
+        SELECT sport_key, fetched_at,
+               datetime('now') as now,
+               ROUND((julianday('now') - julianday(fetched_at)) * 24, 1) as age_hours
+        FROM matches_cache
+        ORDER BY fetched_at DESC
+    """).fetchall()
+    db.close()
+    return {
+        "cached_leagues": [
+            {
+                "sport_key":  r["sport_key"],
+                "label":      LEAGUES.get(r["sport_key"], r["sport_key"]),
+                "fetched_at": r["fetched_at"],
+                "age_hours":  r["age_hours"],
+                "is_fresh":   r["age_hours"] < DB_CACHE_HOURS,
+            }
+            for r in rows
+        ],
+        "default_leagues": DEFAULT_LEAGUES,
+        "cache_duration_hours": DB_CACHE_HOURS,
+        "memory_cache_sec": ODDS_CACHE_SEC,
+    }
+
+@app.delete("/cache/clear")
+async def cache_clear(user=Depends(get_user)):
+    """Force le rechargement depuis l'API au prochain appel"""
+    db = get_db()
+    db.execute("DELETE FROM matches_cache")
+    db.commit()
+    db.close()
+    _cache.clear()
+    return {"message": "Cache vidé — prochain appel /matches rechargera depuis l'API"}
 
 if __name__ == "__main__":
     import uvicorn
