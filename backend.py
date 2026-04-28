@@ -694,7 +694,7 @@ def _demo_analysis(match: dict, stats: dict) -> dict:
         f"{'Des opportunités de value betting sont confirmées' if vbs else 'Aucune valeur significative détectée'} "
         f"sur ce match. {match['team_home']} affiche un xG de {stats['xg_home']} et une forme "
         f"{stats['form_home']}. "
-        f"{'EV de +' + str(best['ev_pct']) + '% confirmé par Pinnacle.' if best else 'Pas d'écart suffisant entre bookmakers.'}"
+        f"{'EV de +' + str(best['ev_pct']) + '% confirmé par Pinnacle.' if best else 'Aucun écart suffisant entre bookmakers.'}"
     )
 
     return {

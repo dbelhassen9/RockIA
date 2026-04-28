@@ -1,13 +1,21 @@
 'use client'
+import { useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useUserStore } from '@/lib/store'
+import { getToken } from '@/lib/api'
 import { Gem, LogOut } from 'lucide-react'
 
 export default function Navbar() {
   const pathname = usePathname()
   const router = useRouter()
-  const { user, logout } = useUserStore()
+  const { user, logout, loadUser } = useUserStore()
+
+  useEffect(() => {
+    if (!user && getToken()) {
+      loadUser()
+    }
+  }, [])
 
   const handleLogout = () => { logout(); router.push('/login') }
   const initials = user?.full_name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2) ?? '?'

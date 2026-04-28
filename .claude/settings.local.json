@@ -6,7 +6,13 @@
       "Bash(pip install *)",
       "Bash(python -m uvicorn backend:app --port 8000)",
       "Bash(curl -s http://localhost:8000/docs)",
-      "Bash(curl -s http://localhost:8000/)"
+      "Bash(curl -s http://localhost:8000/)",
+      "Bash(py --version)",
+      "Bash(python -m venv venv)",
+      "Bash(\"venv/Scripts/pip.exe\" install *)",
+      "Bash(\"venv/Scripts/pip.exe\" list *)",
+      "Bash(taskkill /PID 17992 /F)",
+      "PowerShell(Stop-Process -Id 17992 -Force)"
     ]
   }
 }
