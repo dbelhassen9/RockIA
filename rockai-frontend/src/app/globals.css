@@ -1,0 +1,46 @@
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg:            #080c10;
+  --surface:       #0d1318;
+  --surface2:      #111820;
+  --border:        rgba(255,255,255,0.06);
+  --border-accent: rgba(0,210,220,0.28);
+  --accent:        #00d4dc;
+  --accent-dim:    rgba(0,210,220,0.12);
+  --accent-glow:   rgba(0,210,220,0.38);
+  --red:           #ff4757;
+  --red-dim:       rgba(255,71,87,0.12);
+  --gold:          #ffd700;
+  --gold-dim:      rgba(255,215,0,0.12);
+  --text:          #e8edf2;
+  --text-muted:    #4a5568;
+  --text-dim:      #8892a4;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif;
+  min-height: 100vh; -webkit-font-smoothing: antialiased; }
+body::before { content: ''; position: fixed; inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none; z-index: 9998; opacity: 0.4; }
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--surface2); border-radius: 3px; }
+.font-display { font-family: 'Syne', sans-serif; }
+.font-mono    { font-family: 'DM Mono', monospace; }
+@keyframes pulse-dot { 0%,100% { opacity:1 } 50% { opacity:0.3 } }
+.pulse { animation: pulse-dot 2s infinite; }
+@keyframes fadeUp { from { opacity:0; transform:translateY(10px) } to { opacity:1; transform:translateY(0) } }
+.fade-up { animation: fadeUp 0.4s ease both; }
+.text-accent-glow { color: var(--accent); text-shadow: 0 0 40px var(--accent-glow); }
+.grid-bg {
+  background-image: linear-gradient(rgba(255,255,255,0.02) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,0.02) 1px,transparent 1px);
+  background-size: 60px 60px;
+  mask-image: radial-gradient(ellipse 80% 80% at 50% 50%,black,transparent);
+}

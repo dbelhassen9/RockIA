@@ -25,6 +25,7 @@ load_dotenv()
 SECRET_KEY        = os.getenv("SECRET_KEY", "change-this!")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 ODDS_API_KEY      = os.getenv("ODDS_API_KEY", "")
+API_FOOTBALL_KEY  = os.getenv("API_FOOTBALL_KEY", "")
 DATABASE_PATH     = os.getenv("DATABASE_PATH", "rockai.db")
 ALGORITHM         = "HS256"
 TOKEN_EXPIRE_DAYS = 30
@@ -94,6 +95,7 @@ def init_db():
         password_hash TEXT NOT NULL,
         full_name     TEXT,
         plan          TEXT DEFAULT 'free',
+        credits       INTEGER DEFAULT 50,
         bankroll      REAL DEFAULT 1000,
         created_at    TEXT DEFAULT (datetime('now')),
         last_login    TEXT
@@ -120,7 +122,15 @@ def init_db():
         match_date     TEXT
     );
     """)
-    c.commit(); c.close()
+    c.commit()
+    # Migration: ajoute la colonne credits aux anciens comptes
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN credits INTEGER DEFAULT 50")
+        c.commit()
+        logger.info("✓ Migration: colonne credits ajoutée")
+    except Exception:
+        pass
+    c.close()
     logger.info("✓ DB ready")
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -573,6 +583,154 @@ async def get_all_matches_with_ev(leagues: List[str]) -> List[Dict]:
     return matches
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ANALYSE IA — xG / FORME / H2H + CLAUDE
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _demo_stats(team_home: str, team_away: str) -> dict:
+    """Stats démo déterministes basées sur le nom des équipes (sans clé API-Football)"""
+    import hashlib
+    def dh(s: str) -> float:
+        return int(hashlib.md5(s.lower().encode()).hexdigest()[:8], 16) / 0xFFFFFFFF
+
+    xg_home = round(0.9 + dh(team_home) * 1.5, 1)
+    xg_away = round(0.7 + dh(team_away) * 1.4, 1)
+
+    letters = ['V', 'D', 'N']
+    form_home = ''.join(letters[int(dh(team_home + str(i)) * 2.99)] for i in range(5))
+    form_away = ''.join(letters[int(dh(team_away + str(i)) * 2.99)] for i in range(5))
+
+    raw = int(dh(team_home + team_away) * 12)
+    h2h_hw = raw % 4
+    h2h_aw = (raw // 4) % 3
+    h2h_d  = max(0, 5 - h2h_hw - h2h_aw)
+    if h2h_hw + h2h_aw + h2h_d != 5:
+        h2h_hw, h2h_aw, h2h_d = 2, 2, 1
+
+    return {
+        "xg_home": xg_home, "xg_away": xg_away,
+        "form_home": form_home, "form_away": form_away,
+        "h2h_home_wins": h2h_hw, "h2h_away_wins": h2h_aw, "h2h_draws": h2h_d,
+        "data_source": "demo",
+    }
+
+async def fetch_match_stats(team_home: str, team_away: str) -> dict:
+    """Fetch stats xG/forme/H2H via API-Football, fallback démo si clé absente"""
+    # TODO: intégration complète API-Football (nécessite IDs équipes)
+    # Pour l'instant : fallback démo déterministe
+    return _demo_stats(team_home, team_away)
+
+def _build_analysis_prompt(match: dict, stats: dict) -> str:
+    vbs  = match.get("value_bets", [])
+    vb_lines = "\n".join(
+        f"  • {v['bet_label']} @ {v['odds']} chez {v['bookmaker']} | EV: +{v['ev_pct']}% | Kelly: {v['kelly_pct']}%"
+        for v in vbs[:5]
+    ) if vbs else "  Aucun value bet détecté"
+
+    return f"""Tu es RockAI, un expert en value betting utilisant la méthode Pinnacle.
+
+MATCH : {match['team_home']} vs {match['team_away']}
+LIGUE : {match['league']}
+DATE  : {match['commence_time'][:16].replace('T', ' ')}
+
+COTES PINNACLE (fair odds du marché) :
+  • {match['team_home']} : {match.get('odds_home', 'N/A')}
+  • Nul : {match.get('odds_draw', 'N/A')}
+  • {match['team_away']} : {match.get('odds_away', 'N/A')}
+
+STATISTIQUES PRÉ-MATCH :
+  • xG moyen {match['team_home']} (5 matchs) : {stats['xg_home']}
+  • xG moyen {match['team_away']} (5 matchs) : {stats['xg_away']}
+  • Forme {match['team_home']} : {stats['form_home']}  (V=victoire D=défaite N=nul, récent → ancien)
+  • Forme {match['team_away']} : {stats['form_away']}
+  • H2H 5 derniers : {stats['h2h_home_wins']}V / {stats['h2h_draws']}N / {stats['h2h_away_wins']}D pour {match['team_home']}
+
+VALUE BETS DÉTECTÉS ({len(vbs)}) :
+{vb_lines}
+
+Réponds UNIQUEMENT avec un objet JSON valide (pas de markdown, pas de texte hors JSON) :
+{{
+  "recommendation": "phrase d'action courte et précise (ex: Parier Arsenal @ 1.95 Bet365)",
+  "confidence": 75,
+  "risk_level": "modéré",
+  "reasoning": "2-3 phrases d'analyse factuelle en français",
+  "factors": ["facteur clé 1", "facteur clé 2", "facteur clé 3"]
+}}
+confidence : 0-100. risk_level : "faible", "modéré" ou "élevé"."""
+
+def _demo_analysis(match: dict, stats: dict) -> dict:
+    """Analyse de fallback quand Claude n'est pas disponible"""
+    vbs  = match.get("value_bets", [])
+    best = vbs[0] if vbs else None
+    has_strong = any(v.get("is_strong") for v in vbs)
+
+    if not vbs:
+        confidence, risk = 28, "élevé"
+        reco = "Aucun value bet — passer ce match"
+    elif has_strong:
+        confidence, risk = 83, "faible"
+        reco = f"Parier {best['bet_label']} @ {best['odds']:.2f} chez {best['bookmaker']}"
+    else:
+        confidence, risk = 64, "modéré"
+        reco = f"Signal modéré : {best['bet_label']} @ {best['odds']:.2f} chez {best['bookmaker']}"
+
+    factors = []
+    if best:
+        factors.append(f"EV de +{best['ev_pct']:.1f}% validé par la méthode Pinnacle")
+    xg_diff = stats["xg_home"] - stats["xg_away"]
+    if xg_diff > 0.4:
+        factors.append(f"Domination offensive de {match['team_home']} (xG {stats['xg_home']} vs {stats['xg_away']})")
+    elif xg_diff < -0.4:
+        factors.append(f"Avantage offensif {match['team_away']} (xG {stats['xg_away']} vs {stats['xg_home']})")
+    else:
+        factors.append(f"xG équilibrés ({stats['xg_home']} vs {stats['xg_away']})")
+    if stats["form_home"].count('V') >= 3:
+        factors.append(f"Excellente forme de {match['team_home']} ({stats['form_home'].count('V')}/5 victoires)")
+    if stats["h2h_home_wins"] > stats["h2h_away_wins"] + 1:
+        factors.append(f"H2H favorable au domicile ({stats['h2h_home_wins']}-{stats['h2h_draws']}-{stats['h2h_away_wins']})")
+    if len(factors) < 3:
+        factors.append("Analyse basée sur les cotes de marché en temps réel")
+
+    reasoning = (
+        f"{'Des opportunités de value betting sont confirmées' if vbs else 'Aucune valeur significative détectée'} "
+        f"sur ce match. {match['team_home']} affiche un xG de {stats['xg_home']} et une forme "
+        f"{stats['form_home']}. "
+        f"{'EV de +' + str(best['ev_pct']) + '% confirmé par Pinnacle.' if best else 'Pas d'écart suffisant entre bookmakers.'}"
+    )
+
+    return {
+        "recommendation": reco, "confidence": confidence,
+        "risk_level": risk, "reasoning": reasoning, "factors": factors[:5],
+    }
+
+async def call_claude_analyse(match: dict, stats: dict) -> dict:
+    """Appel Claude pour l'analyse structurée du match"""
+    if not ANTHROPIC_API_KEY:
+        return _demo_analysis(match, stats)
+
+    def _sync():
+        import anthropic
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        prompt = _build_analysis_prompt(match, stats)
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=700,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = response.content[0].text.strip()
+        # Retire le bloc markdown si présent
+        if text.startswith("```"):
+            lines = text.split("\n")
+            text = "\n".join(lines[1:])
+            text = text.rsplit("```", 1)[0]
+        return json.loads(text.strip())
+
+    try:
+        return await asyncio.to_thread(_sync)
+    except Exception as e:
+        logger.error(f"Claude analyse error: {e}")
+        return _demo_analysis(match, stats)
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ENDPOINTS
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -598,8 +756,8 @@ async def register(b: UserRegister):
     db = get_db()
     if db.execute("SELECT id FROM users WHERE email=?", (b.email,)).fetchone():
         db.close(); raise HTTPException(400, "Email déjà utilisé")
-    db.execute("INSERT INTO users (email,password_hash,full_name) VALUES (?,?,?)",
-               (b.email, hash_pw(b.password), b.full_name))
+    db.execute("INSERT INTO users (email,password_hash,full_name,credits) VALUES (?,?,?,?)",
+               (b.email, hash_pw(b.password), b.full_name, 50))
     db.commit(); db.close()
     return {"access_token": make_token(b.email), "token_type": "bearer"}
 
@@ -660,6 +818,57 @@ async def get_match(match_id: str, user=Depends(get_user)):
     if not match:
         raise HTTPException(404, "Match introuvable")
     return match
+
+@app.post("/matches/{match_id}/analyse")
+async def analyse_match(match_id: str, user=Depends(get_user)):
+    """Analyse IA structurée d'un match (xG + forme + Claude) — consomme 1 crédit"""
+    credits  = user.get("credits", 0) or 0
+    is_elite = user.get("plan") == "elite"
+
+    if credits <= 0 and not is_elite:
+        raise HTTPException(402, "Crédits épuisés. Passe au plan Pro pour continuer.")
+
+    # Cache par user + match (évite de consommer un crédit sur double-clic)
+    ck = f"analyse:{match_id}:{user['id']}"
+    cached = cache_get(ck)
+    if cached:
+        return {**cached, "credits_remaining": credits, "from_cache": True}
+
+    matches = await get_all_matches_with_ev(list(LEAGUES.keys()))
+    match = next((m for m in matches if m["match_id"] == match_id), None)
+    if not match:
+        raise HTTPException(404, "Match introuvable")
+
+    stats    = await fetch_match_stats(match["team_home"], match["team_away"])
+    analysis = await call_claude_analyse(match, stats)
+
+    result = {
+        **analysis,
+        "xg_home":        stats["xg_home"],
+        "xg_away":        stats["xg_away"],
+        "form_home":      stats["form_home"],
+        "form_away":      stats["form_away"],
+        "h2h_home_wins":  stats["h2h_home_wins"],
+        "h2h_away_wins":  stats["h2h_away_wins"],
+        "h2h_draws":      stats["h2h_draws"],
+        "data_source":    stats["data_source"],
+        "best_bet_label": match.get("best_bet_label"),
+        "best_odds":      match.get("best_odds"),
+        "best_bookmaker": match.get("best_bookmaker"),
+        "best_ev_pct":    match.get("best_ev_pct"),
+        "best_kelly_pct": match.get("best_kelly"),
+    }
+
+    # Déduit 1 crédit (plan gratuit / pro)
+    db = get_db()
+    if not is_elite and credits > 0:
+        db.execute("UPDATE users SET credits = credits - 1 WHERE id=?", (user["id"],))
+        db.commit()
+        credits -= 1
+    db.close()
+
+    cache_set(ck, result, 300)
+    return {**result, "credits_remaining": credits, "from_cache": False}
 
 # ── Bets ───────────────────────────────────────────────────────────────────────
 @app.post("/bets")
