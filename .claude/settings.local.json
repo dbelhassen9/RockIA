@@ -12,7 +12,9 @@
       "Bash(\"venv/Scripts/pip.exe\" install *)",
       "Bash(\"venv/Scripts/pip.exe\" list *)",
       "Bash(taskkill /PID 17992 /F)",
-      "PowerShell(Stop-Process -Id 17992 -Force)"
+      "PowerShell(Stop-Process -Id 17992 -Force)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend.py'\\).read\\(\\)\\); print\\('OK — syntaxe valide'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")"
     ]
   }
 }

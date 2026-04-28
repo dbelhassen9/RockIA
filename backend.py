@@ -33,8 +33,14 @@ TOKEN_EXPIRE_DAYS = 30
 # Pinnacle a ~2-3% de marge → on retire ça pour avoir la fair odd
 PINNACLE_MARGIN   = 0.02
 # Seuil minimum pour afficher comme value bet
-EV_MIN_DISPLAY    = 0.02   # 2%  → apparaît dans l'agenda
-EV_MIN_ALERT      = 0.05   # 5%  → badge "VALUE BET" rouge
+EV_MIN_DISPLAY    = 0.04   # 4% minimum pour afficher
+EV_MIN_ALERT      = 0.07   # 7% pour badge "fort"
+
+# Bookmakers exclus de la comparaison (exchanges, pas des bookmakers classiques)
+EXCLUDE_BOOKMAKERS = {
+    "pinnacle", "betfair", "betfair_ex_eu", "betfair_ex_uk",
+    "matchbook", "betfair_sb_uk"
+}
 # Cache
 ODDS_CACHE_SEC    = 600    # 10 min en mémoire
 DB_CACHE_HOURS    = 6      # 6h en base SQLite
@@ -296,17 +302,18 @@ def find_value_bets(event: dict, sport_key: str) -> List[Dict]:
 
     Algo :
     1. Extrait les cotes Pinnacle → calcule les fair odds
-    2. Pour chaque autre bookmaker :
+    2. Pour chaque bookmaker (hors exchanges) :
        - Compare leurs cotes contre les fair odds
        - Si EV > seuil → c'est une value bet
-    3. Retourne la liste triée par EV décroissant
+    3. Traite aussi les marchés Over/Under et BTTS
+    4. Retourne la liste triée par EV décroissant
     """
     bk_odds = extract_odds_by_bookmaker(event)
 
     # Cherche Pinnacle (clé "pinnacle" dans l'API)
     pinnacle = bk_odds.get("pinnacle")
     if not pinnacle:
-        # Fallback : utilise la moyenne des 3 meilleurs bookmakers comme référence
+        # Fallback : utilise un bookmaker sharp comme référence
         sharp_bks = ["betfair", "betfair_ex_eu", "betfair_ex_uk", "matchbook",
                      "nordicbet", "unibet_eu", "williamhill"]
         for bk in sharp_bks:
@@ -326,25 +333,24 @@ def find_value_bets(event: dict, sport_key: str) -> List[Dict]:
     label     = LEAGUES.get(sport_key, sport_key)
     value_bets = []
 
+    # ── Marché h2h (1X2) ──────────────────────────────────────────────────────
     for bk_name, odds in bk_odds.items():
-        if bk_name == "pinnacle":
-            continue  # on compare les autres contre Pinnacle
+        if bk_name in EXCLUDE_BOOKMAKERS:
+            continue
 
         for side in ["home", "draw", "away"]:
-            bk_price  = odds.get(side)
+            bk_price   = odds.get(side)
             fair_price = fair.get(side)
 
             if not bk_price or not fair_price:
                 continue
 
             ev = calc_ev_vs_pinnacle(bk_price, fair_price)
-
             if ev < EV_MIN_DISPLAY:
-                continue  # pas assez intéressant
+                continue
 
             kelly_pct = calc_kelly(ev, bk_price)
 
-            # Label lisible du pari
             if side == "home":
                 bet_label = f"Victoire {home_team}"
             elif side == "away":
@@ -370,13 +376,133 @@ def find_value_bets(event: dict, sport_key: str) -> List[Dict]:
                 "ev_pct":        round(ev * 100, 2),
                 "kelly_pct":     kelly_pct,
                 "is_strong":     ev >= EV_MIN_ALERT,
-                # Calcul de mise recommandée pour différentes bankrolls
+                "market":        "h2h",
                 "stake_100":     round(100  * kelly_pct / 100, 2),
                 "stake_500":     round(500  * kelly_pct / 100, 2),
                 "stake_1000":    round(1000 * kelly_pct / 100, 2),
             })
 
-    # Trie : meilleur EV en premier
+    # ── Marché Over/Under (totals) ─────────────────────────────────────────────
+    for bk in event.get("bookmakers", []):
+        bk_key = bk["key"].lower()
+        if bk_key in EXCLUDE_BOOKMAKERS:
+            continue
+        for mkt in bk.get("markets", []):
+            if mkt["key"] != "totals":
+                continue
+            for outcome in mkt["outcomes"]:
+                point    = outcome.get("point", 2.5)
+                name     = outcome["name"]  # "Over" ou "Under"
+                bk_price = float(outcome["price"])
+
+                # Fair odd Pinnacle sur le même outcome
+                pin_price = None
+                for pin_bk in event.get("bookmakers", []):
+                    if pin_bk["key"] != "pinnacle":
+                        continue
+                    for pin_mkt in pin_bk.get("markets", []):
+                        if pin_mkt["key"] != "totals":
+                            continue
+                        for pin_out in pin_mkt["outcomes"]:
+                            if pin_out.get("point") == point and pin_out["name"] == name:
+                                pin_price = float(pin_out["price"])
+
+                if not pin_price:
+                    continue
+
+                fair_price = pin_price * (1 + PINNACLE_MARGIN)
+                ev = calc_ev_vs_pinnacle(bk_price, fair_price)
+                if ev < EV_MIN_DISPLAY:
+                    continue
+
+                kelly_pct = calc_kelly(ev, bk_price)
+                value_bets.append({
+                    "match_id":      event["id"],
+                    "sport_key":     sport_key,
+                    "league":        label,
+                    "team_home":     home_team,
+                    "team_away":     away_team,
+                    "commence_time": event["commence_time"],
+                    "bet_on":        f"total_{name.lower()}_{point}",
+                    "bet_label":     f"{name} {point} buts",
+                    "bookmaker":     bk_key.replace("_", " ").title(),
+                    "bookmaker_key": bk_key,
+                    "odds":          bk_price,
+                    "fair_odds":     round(fair_price, 3),
+                    "pinnacle_odds": pin_price,
+                    "ev":            ev,
+                    "ev_pct":        round(ev * 100, 2),
+                    "kelly_pct":     kelly_pct,
+                    "is_strong":     ev >= EV_MIN_ALERT,
+                    "market":        "totals",
+                    "stake_100":     round(kelly_pct, 2),
+                    "stake_500":     round(500 * kelly_pct / 100, 2),
+                    "stake_1000":    round(1000 * kelly_pct / 100, 2),
+                })
+
+    # ── Marché BTTS (Both Teams To Score) ─────────────────────────────────────
+    for bk in event.get("bookmakers", []):
+        bk_key = bk["key"].lower()
+        if bk_key in EXCLUDE_BOOKMAKERS:
+            continue
+        for mkt in bk.get("markets", []):
+            if mkt["key"] != "btts":
+                continue
+            for outcome in mkt["outcomes"]:
+                name     = outcome["name"]  # "Yes" ou "No"
+                bk_price = float(outcome["price"])
+
+                pin_price = None
+                for pin_bk in event.get("bookmakers", []):
+                    if pin_bk["key"] != "pinnacle":
+                        continue
+                    for pin_mkt in pin_bk.get("markets", []):
+                        if pin_mkt["key"] != "btts":
+                            continue
+                        for pin_out in pin_mkt["outcomes"]:
+                            if pin_out["name"] == name:
+                                pin_price = float(pin_out["price"])
+
+                if not pin_price:
+                    continue
+
+                fair_price = pin_price * (1 + PINNACLE_MARGIN)
+                ev = calc_ev_vs_pinnacle(bk_price, fair_price)
+                if ev < EV_MIN_DISPLAY:
+                    continue
+
+                if name == "Yes":
+                    bet_label = "Les deux équipes marquent ✓"
+                elif name == "No":
+                    bet_label = "Les deux équipes marquent ✗"
+                else:
+                    bet_label = f"Les deux équipes marquent : {name}"
+
+                kelly_pct = calc_kelly(ev, bk_price)
+                value_bets.append({
+                    "match_id":      event["id"],
+                    "sport_key":     sport_key,
+                    "league":        label,
+                    "team_home":     home_team,
+                    "team_away":     away_team,
+                    "commence_time": event["commence_time"],
+                    "bet_on":        f"btts_{name.lower()}",
+                    "bet_label":     bet_label,
+                    "bookmaker":     bk_key.replace("_", " ").title(),
+                    "bookmaker_key": bk_key,
+                    "odds":          bk_price,
+                    "fair_odds":     round(fair_price, 3),
+                    "pinnacle_odds": pin_price,
+                    "ev":            ev,
+                    "ev_pct":        round(ev * 100, 2),
+                    "kelly_pct":     kelly_pct,
+                    "is_strong":     ev >= EV_MIN_ALERT,
+                    "market":        "btts",
+                    "stake_100":     round(kelly_pct, 2),
+                    "stake_500":     round(500 * kelly_pct / 100, 2),
+                    "stake_1000":    round(1000 * kelly_pct / 100, 2),
+                })
+
     value_bets.sort(key=lambda x: x["ev"], reverse=True)
     return value_bets
 
@@ -428,7 +554,7 @@ async def fetch_league(session: aiohttp.ClientSession, sport_key: str) -> List[D
         f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds"
         f"?apiKey={ODDS_API_KEY}"
         f"&regions=eu,uk"
-        f"&markets=h2h"
+        f"&markets=h2h,totals,btts"
         f"&oddsFormat=decimal"
         f"&dateFormat=iso"
     )
@@ -441,6 +567,7 @@ async def fetch_league(session: aiohttp.ClientSession, sport_key: str) -> List[D
             if r.status == 401:
                 raise HTTPException(500, "Clé OddsAPI invalide")
             if r.status == 422:
+                logger.info(f"[HORS SAISON] {sport_key} — aucun match disponible actuellement")
                 return []   # sport hors saison — ne pas cacher
             if r.status == 429:
                 logger.warning("Rate limit OddsAPI — utilisation du cache démo")
@@ -686,11 +813,16 @@ async def fetch_match_stats(team_home: str, team_away: str) -> dict:
     return _demo_stats(team_home, team_away)
 
 def _build_analysis_prompt(match: dict, stats: dict) -> str:
-    vbs  = match.get("value_bets", [])
-    vb_lines = "\n".join(
-        f"  • {v['bet_label']} @ {v['odds']} chez {v['bookmaker']} | EV: +{v['ev_pct']}% | Kelly: {v['kelly_pct']}%"
-        for v in vbs[:5]
-    ) if vbs else "  Aucun value bet détecté"
+    vbs       = match.get("value_bets", [])
+    vbs_h2h   = [v for v in vbs if v.get("market", "h2h") == "h2h"]
+    vbs_total = [v for v in vbs if v.get("market") == "totals"]
+    vbs_btts  = [v for v in vbs if v.get("market") == "btts"]
+
+    def fmt_vbs(lst):
+        return "\n".join(
+            f"  • {v['bet_label']} @ {v['odds']} chez {v['bookmaker']} | EV: +{v['ev_pct']}%"
+            for v in lst[:3]
+        ) if lst else "  Aucun"
 
     return f"""Tu es RockAI, un expert en value betting utilisant la méthode Pinnacle.
 
@@ -710,12 +842,18 @@ STATISTIQUES PRÉ-MATCH :
   • Forme {match['team_away']} : {stats['form_away']}
   • H2H 5 derniers : {stats['h2h_home_wins']}V / {stats['h2h_draws']}N / {stats['h2h_away_wins']}D pour {match['team_home']}
 
-VALUE BETS DÉTECTÉS ({len(vbs)}) :
-{vb_lines}
+VALUE BETS 1X2 ({len(vbs_h2h)}) :
+{fmt_vbs(vbs_h2h)}
+
+VALUE BETS OVER/UNDER ({len(vbs_total)}) :
+{fmt_vbs(vbs_total)}
+
+VALUE BETS BTTS ({len(vbs_btts)}) :
+{fmt_vbs(vbs_btts)}
 
 Réponds UNIQUEMENT avec un objet JSON valide (pas de markdown, pas de texte hors JSON) :
 {{
-  "recommendation": "phrase d'action courte et précise (ex: Parier Arsenal @ 1.95 Bet365)",
+  "recommendation": "La meilleure value bet toutes catégories confondues (1X2, Over/Under, BTTS)",
   "confidence": 75,
   "risk_level": "modéré",
   "reasoning": "2-3 phrases d'analyse factuelle en français",
@@ -1071,6 +1209,29 @@ async def get_stats(user=Depends(get_user)):
 @app.get("/leagues")
 async def get_leagues():
     return {"leagues": [{"key": k, "label": v} for k, v in LEAGUES.items()]}
+
+@app.get("/sports/active")
+async def get_active_sports(user=Depends(get_user)):
+    """Liste les sports avec des matchs disponibles en ce moment"""
+    if not ODDS_API_KEY:
+        return {"sports": DEFAULT_LEAGUES, "mode": "demo"}
+
+    url = f"https://api.the-odds-api.com/v4/sports?apiKey={ODDS_API_KEY}&all=false"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as r:
+            if r.status != 200:
+                return {"sports": [], "error": f"API error {r.status}"}
+            data = await r.json()
+            active = [
+                {
+                    "key":       s["key"],
+                    "label":     LEAGUES.get(s["key"], s["title"]),
+                    "in_season": True,
+                }
+                for s in data
+                if s["key"] in LEAGUES
+            ]
+            return {"sports": active, "mode": "live"}
 
 @app.get("/cache/status")
 async def cache_status(user=Depends(get_user)):
