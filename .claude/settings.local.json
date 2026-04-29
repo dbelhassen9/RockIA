@@ -14,7 +14,11 @@
       "Bash(taskkill /PID 17992 /F)",
       "PowerShell(Stop-Process -Id 17992 -Force)",
       "Bash(python -c \"import ast; ast.parse\\(open\\('backend.py'\\).read\\(\\)\\); print\\('OK — syntaxe valide'\\)\")",
-      "Bash(python -c \"import ast; ast.parse\\(open\\('backend.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\('backend.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(npx tsc *)",
+      "Bash(echo \"Exit: $?\")",
+      "Bash(npm run *)",
+      "Bash(grep -B 1 -A 2 -E \"\\(match\\\\\\\\\\\\\\\\.id.|stats.page|Navbar.tsx|MatchCard.tsx\\)\")"
     ]
   }
 }

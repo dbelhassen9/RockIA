@@ -3,8 +3,11 @@ import{useEffect,useState}from 'react'
 import{useRouter}from 'next/navigation'
 import toast from 'react-hot-toast'
 import Navbar from '@/components/Navbar'
-import{getStats,getBets,Stats,Bet}from '@/lib/api'
+import{getStats,getBets,Stats,Bet,AnalysisResult}from '@/lib/api'
 import{useUserStore}from '@/lib/store'
+import{Brain}from 'lucide-react'
+
+interface StoredAnalysis { id: string; analysis: AnalysisResult }
 
 export default function StatsPage(){
   const router=useRouter()
@@ -12,18 +15,34 @@ export default function StatsPage(){
   const[stats,setStats]=useState<Stats|null>(null)
   const[bets,setBets]=useState<Bet[]>([])
   const[loading,setLoading]=useState(true)
+  const[analyses,setAnalyses]=useState<StoredAnalysis[]>([])
 
   useEffect(()=>{
     loadUser().then(()=>{if(!useUserStore.getState().user)router.push('/login')})
     Promise.all([getStats(),getBets()]).then(([s,b])=>{setStats(s);setBets(b.bets)})
       .catch(e=>toast.error(e.message)).finally(()=>setLoading(false))
+
+    if(typeof window!=='undefined'){
+      const out:StoredAnalysis[]=[]
+      for(let i=0;i<localStorage.length;i++){
+        const k=localStorage.key(i)
+        if(k?.startsWith('rockai_analysis_')){
+          try{
+            const v=JSON.parse(localStorage.getItem(k)!)as AnalysisResult
+            out.push({id:k.replace('rockai_analysis_',''),analysis:v})
+          }catch{/* skip */}
+        }
+      }
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setAnalyses(out)
+    }
   },[])
 
   const kpis=[
     {label:'ROI Global',val:stats?`${stats.roi>=0?'+':''}${stats.roi}%`:'—',color:'var(--accent)'},
     {label:'Taux de réussite',val:stats?`${stats.win_rate}%`:'—',color:'#00b8ff'},
     {label:'Profit net',val:stats?`${stats.total_profit>=0?'+':''}${stats.total_profit}€`:'—',color:'var(--gold)'},
-    {label:'Paris placés',val:stats?String(stats.total_bets):'—',color:'var(--text)'},
+    {label:'Analyses IA',val:String(analyses.length),color:'var(--accent)'},
   ]
 
   return(
@@ -31,8 +50,8 @@ export default function StatsPage(){
       <Navbar/>
       <div className="max-w-5xl mx-auto px-6 py-8">
         <div className="mb-8">
-          <h1 className="font-display font-extrabold text-3xl tracking-tight mb-1">Statistiques</h1>
-          <p className="font-mono text-[0.72rem]" style={{color:'var(--text-muted)'}}>// Suivi de performance · méthode Pinnacle</p>
+          <h1 className="font-display font-extrabold text-3xl tracking-tight mb-1">Historique</h1>
+          <p className="font-mono text-[0.72rem]" style={{color:'var(--text-muted)'}}>{'// Performances · paris · analyses IA passées'}</p>
         </div>
         <div className="grid grid-cols-4 gap-4 mb-8">
           {kpis.map(({label,val,color})=>(
@@ -42,6 +61,36 @@ export default function StatsPage(){
             </div>
           ))}
         </div>
+        {analyses.length>0&&(
+          <div className="rounded-2xl overflow-hidden mb-8" style={{background:'var(--surface)',border:'1px solid var(--border)'}}>
+            <div className="px-6 py-4 border-b flex items-center gap-2" style={{borderColor:'var(--border)'}}>
+              <Brain size={14} style={{color:'var(--accent)'}}/>
+              <span className="font-display font-bold">Analyses IA passées</span>
+              <span className="font-mono text-[0.6rem] uppercase tracking-widest ml-1" style={{color:'var(--text-muted)'}}>· {analyses.length}</span>
+            </div>
+            <div className="divide-y" style={{borderColor:'var(--border)'}}>
+              {analyses.map(({id,analysis})=>(
+                <div key={id} onClick={()=>router.push(`/match/${id}`)}
+                     className="px-6 py-4 cursor-pointer transition-colors hover:bg-white/5">
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div className="flex-1 min-w-0">
+                      <div className="font-display font-semibold text-[0.85rem] truncate">{analysis.recommendation}</div>
+                      <div className="font-mono text-[0.62rem] mt-1" style={{color:'var(--text-muted)'}}>
+                        Confiance {analysis.confidence}% · Risque {analysis.risk_level} · Source {analysis.data_source}
+                      </div>
+                    </div>
+                    {analysis.best_ev_pct!=null&&(
+                      <span className="font-display font-bold text-base" style={{color:'var(--accent)'}}>
+                        +{analysis.best_ev_pct}%
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="rounded-2xl overflow-hidden" style={{background:'var(--surface)',border:'1px solid var(--border)'}}>
           <div className="px-6 py-4 border-b" style={{borderColor:'var(--border)'}}>
             <span className="font-display font-bold">Historique des paris</span>
