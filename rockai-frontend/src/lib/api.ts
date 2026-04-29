@@ -65,6 +65,43 @@ export interface Stats {
   by_sport: { sport: string; bets: number; wins: number; profit: number }[]
 }
 
+export interface PoissonProbabilities {
+  home_win: number
+  draw: number
+  away_win: number
+  over_15: number
+  over_25: number
+  over_35: number
+  btts_yes: number
+  btts_no: number
+  top_scores: { score: string; prob: number }[]
+}
+
+export interface TeamHistoryStats {
+  played: number
+  wins: number
+  draws: number
+  losses: number
+  win_rate: number
+  avg_goals_for: number
+  avg_goals_against: number
+  over_25_rate: number
+  btts_rate: number
+  clean_sheet_rate: number
+  form_str: string
+  home: { played: number; wins: number; avg_gf: number; avg_ga: number }
+  away: { played: number; wins: number; avg_gf: number; avg_ga: number }
+  h2h: {
+    played: number; wins: number; draws: number; losses: number
+    recent?: { date: string; home: number; gf: number; ga: number; result: string }[]
+  }
+  recent_matches: {
+    result: string; goals_for: number; goals_against: number
+    opponent_name: string; match_date: string; is_home: number
+  }[]
+  data_source: string
+}
+
 export interface AnalysisResult {
   recommendation: string
   confidence: number
@@ -78,6 +115,10 @@ export interface AnalysisResult {
   h2h_home_wins: number
   h2h_away_wins: number
   h2h_draws: number
+  h2h_recent?: { date: string; home: number; gf: number; ga: number; result: string }[]
+  probabilities?: PoissonProbabilities
+  stats_home?: TeamHistoryStats
+  stats_away?: TeamHistoryStats
   data_source: string
   best_bet_label: string | null
   best_odds: number | null

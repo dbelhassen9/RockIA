@@ -26,6 +26,7 @@ SECRET_KEY        = os.getenv("SECRET_KEY", "change-this!")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 ODDS_API_KEY      = os.getenv("ODDS_API_KEY", "")
 API_FOOTBALL_KEY  = os.getenv("API_FOOTBALL_KEY", "")
+BSD_API_KEY       = os.getenv("BSD_API_KEY", "")
 DATABASE_PATH     = os.getenv("DATABASE_PATH", "rockai.db")
 ALGORITHM         = "HS256"
 TOKEN_EXPIRE_DAYS = 30
@@ -150,6 +151,44 @@ def init_db():
         fetched_at   TEXT DEFAULT (datetime('now')),
         PRIMARY KEY (sport_key, match_id)
     );
+    CREATE TABLE IF NOT EXISTS team_history (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        team_id_ext     TEXT NOT NULL,
+        team_name       TEXT NOT NULL,
+        sport_key       TEXT NOT NULL,
+        opponent_name   TEXT,
+        match_date      TEXT NOT NULL,
+        is_home         INTEGER,
+        goals_for       INTEGER DEFAULT 0,
+        goals_against   INTEGER DEFAULT 0,
+        result          TEXT,
+        xg_for          REAL DEFAULT 0,
+        xg_against      REAL DEFAULT 0,
+        source          TEXT DEFAULT 'api_football',
+        fetched_at      TEXT DEFAULT (datetime('now')),
+        UNIQUE(team_id_ext, match_date, opponent_name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_team_history_team ON team_history(team_name, sport_key);
+    CREATE INDEX IF NOT EXISTS idx_team_history_date ON team_history(match_date);
+    CREATE TABLE IF NOT EXISTS h2h_cache (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        team_home_id    TEXT NOT NULL,
+        team_away_id    TEXT NOT NULL,
+        match_date      TEXT NOT NULL,
+        goals_home      INTEGER,
+        goals_away      INTEGER,
+        scorers_home    TEXT,
+        scorers_away    TEXT,
+        fetched_at      TEXT DEFAULT (datetime('now')),
+        UNIQUE(team_home_id, team_away_id, match_date)
+    );
+    CREATE TABLE IF NOT EXISTS team_ids (
+        team_name   TEXT NOT NULL,
+        sport_key   TEXT NOT NULL,
+        ext_id      TEXT NOT NULL,
+        source      TEXT DEFAULT 'api_football',
+        PRIMARY KEY (team_name, sport_key)
+    );
     """)
     c.commit()
     # Migration: ajoute la colonne credits aux anciens comptes
@@ -159,6 +198,21 @@ def init_db():
         logger.info("✓ Migration: colonne credits ajoutée")
     except Exception:
         pass
+
+    # Nettoie le cache corrompu (résultats vides) au démarrage
+    try:
+        cur = c.execute("""
+            DELETE FROM matches_cache
+            WHERE data_json IN ('[]', 'null', '', '{}')
+            OR data_json IS NULL
+        """)
+        deleted = cur.rowcount
+        if deleted > 0:
+            logger.info(f"✓ Cache nettoyé : {deleted} entrées vides supprimées")
+        c.commit()
+    except Exception as e:
+        logger.warning(f"Cache cleanup warning: {e}")
+
     c.close()
     logger.info("✓ DB ready")
 
@@ -578,19 +632,22 @@ async def fetch_league(session: aiohttp.ClientSession, sport_key: str) -> List[D
 
             data = await r.json()
 
-            # Sauvegarde en cache mémoire ET SQLite
-            cache_set(ck, data, ODDS_CACHE_SEC)
-            try:
-                db = get_db()
-                db.execute("""
-                    INSERT OR REPLACE INTO matches_cache (sport_key, match_id, data_json, fetched_at)
-                    VALUES (?, ?, ?, datetime('now'))
-                """, (sport_key, sport_key, json.dumps(data)))
-                db.commit()
-                db.close()
-                logger.info(f"[DB SAVE] {sport_key} — {len(data)} matchs sauvegardés")
-            except Exception as e:
-                logger.error(f"DB cache write error: {e}")
+            # Sauvegarde en cache mémoire ET SQLite — uniquement si on a des données réelles
+            if data:
+                cache_set(ck, data, ODDS_CACHE_SEC)
+                try:
+                    db = get_db()
+                    db.execute("""
+                        INSERT OR REPLACE INTO matches_cache (sport_key, match_id, data_json, fetched_at)
+                        VALUES (?, ?, ?, datetime('now'))
+                    """, (sport_key, sport_key, json.dumps(data)))
+                    db.commit()
+                    db.close()
+                    logger.info(f"[DB SAVE] {sport_key} — {len(data)} matchs sauvegardés")
+                except Exception as e:
+                    logger.error(f"DB cache write error: {e}")
+            else:
+                logger.info(f"[SKIP CACHE] {sport_key} — réponse vide, pas de mise en cache")
 
             return data
 
@@ -820,139 +877,578 @@ AFL_LEAGUE_IDS = {
     "soccer_portugal_primeira_liga":  94,
 }
 
-_AFL_HEADERS = {
-    "X-RapidAPI-Key":  API_FOOTBALL_KEY,
-    "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com",
-}
-_AFL_BASE = "https://api-football-v1.p.rapidapi.com/v3"
-
-async def _afl_get(session: aiohttp.ClientSession, path: str) -> dict:
-    """GET vers API-Football avec timeout 8s, retourne {} en cas d'erreur"""
+async def get_team_id_apisports(
+    session: aiohttp.ClientSession,
+    team_name: str,
+    league_id: int,
+    season: int
+) -> Optional[int]:
+    """Cherche ID équipe sur api-sports.io"""
+    headers = {"x-apisports-key": API_FOOTBALL_KEY}
+    url = (
+        f"https://v3.football.api-sports.io/teams"
+        f"?name={team_name}&league={league_id}&season={season}"
+    )
     try:
-        headers = {
-            "X-RapidAPI-Key":  API_FOOTBALL_KEY,
-            "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com",
-        }
-        async with session.get(
-            f"{_AFL_BASE}{path}",
-            headers=headers,
-            timeout=aiohttp.ClientTimeout(total=8),
-        ) as r:
+        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as r:
             if r.status != 200:
-                logger.warning(f"API-Football {r.status} — {path}")
-                return {}
-            return await r.json()
+                return None
+            data = await r.json()
+            resp = data.get("response", [])
+            if resp:
+                return resp[0]["team"]["id"]
+            url2 = f"https://v3.football.api-sports.io/teams?search={team_name}"
+            async with session.get(url2, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as r2:
+                data2 = await r2.json()
+                resp2 = data2.get("response", [])
+                return resp2[0]["team"]["id"] if resp2 else None
     except Exception as e:
-        logger.error(f"API-Football error ({path}): {e}")
+        logger.error(f"get_team_id error {team_name}: {e}")
+        return None
+
+
+async def get_team_form(
+    session: aiohttp.ClientSession,
+    team_id: int,
+    league_id: int,
+    season: int
+) -> dict:
+    """Récupère forme récente et stats via api-sports.io"""
+    headers = {"x-apisports-key": API_FOOTBALL_KEY}
+    url = (
+        f"https://v3.football.api-sports.io/teams/statistics"
+        f"?team={team_id}&league={league_id}&season={season}"
+    )
+    try:
+        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as r:
+            if r.status != 200:
+                return {}
+            data = await r.json()
+            resp = data.get("response", {})
+            form_raw = resp.get("form", "") or ""
+            goals_for = resp.get("goals", {}).get("for", {}).get("average", {})
+            goals_ag  = resp.get("goals", {}).get("against", {}).get("average", {})
+            fixtures  = resp.get("fixtures", {})
+
+            form_converted = (
+                form_raw[-5:]
+                .replace("W", "V")
+                .replace("D", "N")
+                .replace("L", "D")
+            ) if form_raw else "NNNNN"
+
+            return {
+                "form":          form_converted,
+                "goals_for":     float(goals_for.get("total") or 0),
+                "goals_against": float(goals_ag.get("total") or 0),
+                "wins":   (fixtures.get("wins") or {}).get("total", 0),
+                "draws":  (fixtures.get("draws") or {}).get("total", 0),
+                "losses": (fixtures.get("loses") or {}).get("total", 0),
+            }
+    except Exception as e:
+        logger.error(f"get_team_form error: {e}")
         return {}
 
-async def _search_team_id(session: aiohttp.ClientSession, team_name: str, league_id: int, season: int) -> Optional[int]:
-    """Cherche l'ID d'une équipe par nom + ligue, fallback sans filtre ligue"""
-    data = await _afl_get(session, f"/teams?name={team_name}&league={league_id}&season={season}")
-    teams = data.get("response", [])
-    if teams:
-        return teams[0]["team"]["id"]
-    # Fallback sans ligue
-    data2 = await _afl_get(session, f"/teams?name={team_name}")
-    teams2 = data2.get("response", [])
-    return teams2[0]["team"]["id"] if teams2 else None
 
-async def _fetch_season_stats(session: aiohttp.ClientSession, team_id: int, league_id: int, season: int) -> dict:
-    """Stats de saison : buts/match, forme, clean sheets"""
-    data = await _afl_get(session, f"/teams/statistics?team={team_id}&league={league_id}&season={season}")
-    resp = data.get("response", {})
-    goals_for = resp.get("goals", {}).get("for", {}).get("average", {})
-    goals_ag  = resp.get("goals", {}).get("against", {}).get("average", {})
-    fixtures  = resp.get("fixtures", {})
-    form_str  = resp.get("form", "") or ""
+async def get_h2h(
+    session: aiohttp.ClientSession,
+    team_id_home: int,
+    team_id_away: int
+) -> dict:
+    """H2H 5 derniers matchs via api-sports.io"""
+    headers = {"x-apisports-key": API_FOOTBALL_KEY}
+    url = (
+        f"https://v3.football.api-sports.io/fixtures/headtohead"
+        f"?h2h={team_id_home}-{team_id_away}&last=5"
+    )
+    try:
+        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as r:
+            if r.status != 200:
+                return {"home_wins": 0, "draws": 0, "away_wins": 0}
+            data = await r.json()
+            fixtures = data.get("response", [])
+            hw = draws = aw = 0
+            for f in fixtures:
+                goals = f.get("goals", {})
+                gh = goals.get("home") or 0
+                ga = goals.get("away") or 0
+                fh_id = f.get("teams", {}).get("home", {}).get("id")
+                if gh == ga:
+                    draws += 1
+                elif gh > ga:
+                    if fh_id == team_id_home: hw += 1
+                    else: aw += 1
+                else:
+                    if fh_id == team_id_home: aw += 1
+                    else: hw += 1
+            return {"home_wins": hw, "draws": draws, "away_wins": aw}
+    except Exception as e:
+        logger.error(f"get_h2h error: {e}")
+        return {"home_wins": 0, "draws": 0, "away_wins": 0}
+
+
+async def get_xg_from_bsd(
+    session: aiohttp.ClientSession,
+    team_home: str,
+    team_away: str
+) -> dict:
+    """
+    Récupère le xG moyen des 5 derniers matchs via Bzzoiro BSD (gratuit, illimité).
+    """
+    if not BSD_API_KEY:
+        return {"xg_home": None, "xg_away": None}
+
+    headers = {"Authorization": f"Token {BSD_API_KEY}"}
+
+    async def get_team_avg_xg(team_name: str) -> Optional[float]:
+        url = f"https://sports.bzzoiro.com/api/teams/?search={team_name}"
+        try:
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as r:
+                if r.status != 200:
+                    return None
+                data = await r.json()
+                results = data.get("results", [])
+                if not results:
+                    return None
+                team_id = results[0]["id"]
+
+            url2 = f"https://sports.bzzoiro.com/api/events/?team={team_id}&last=5"
+            async with session.get(url2, headers=headers, timeout=aiohttp.ClientTimeout(total=8)) as r2:
+                if r2.status != 200:
+                    return None
+                data2 = await r2.json()
+                events = data2.get("results", [])
+
+                xg_values = []
+                for event in events:
+                    shotmap = event.get("shotmap", [])
+                    is_home = event.get("home_team", {}).get("id") == team_id
+                    team_xg = sum(
+                        s.get("xg", 0) or 0
+                        for s in shotmap
+                        if s.get("home") == is_home
+                    )
+                    if team_xg > 0:
+                        xg_values.append(team_xg)
+
+                return round(sum(xg_values) / len(xg_values), 2) if xg_values else None
+        except Exception as e:
+            logger.error(f"BSD xG error for {team_name}: {e}")
+            return None
+
+    xg_h, xg_a = await asyncio.gather(
+        get_team_avg_xg(team_home),
+        get_team_avg_xg(team_away)
+    )
+    return {"xg_home": xg_h, "xg_away": xg_a}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HISTORIQUE 2 ANS + PROBABILITÉS POISSON
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def fetch_and_store_team_history(
+    session: aiohttp.ClientSession,
+    team_id: int,
+    team_name: str,
+    league_id: int,
+    sport_key: str
+) -> int:
+    """
+    Télécharge les 2 dernières saisons de matchs pour une équipe
+    et les stocke en BDD. Retourne le nombre de matchs stockés.
+    Ne re-fetch pas si les données sont récentes (< 24h).
+    """
+    db = get_db()
+    existing = db.execute("""
+        SELECT COUNT(*) FROM team_history
+        WHERE team_id_ext = ? AND sport_key = ?
+        AND fetched_at > datetime('now', '-24 hours')
+    """, (str(team_id), sport_key)).fetchone()[0]
+
+    if existing > 10:
+        db.close()
+        logger.debug(f"[CACHE] Historique déjà dispo pour {team_name}")
+        return existing
+
+    if not API_FOOTBALL_KEY:
+        db.close()
+        return 0
+
+    headers = {"x-apisports-key": API_FOOTBALL_KEY}
+    stored = 0
+
+    for season in [2024, 2023]:
+        url = (
+            f"https://v3.football.api-sports.io/fixtures"
+            f"?team={team_id}&league={league_id}&season={season}&status=FT"
+        )
+        try:
+            async with session.get(url, headers=headers,
+                                   timeout=aiohttp.ClientTimeout(total=10)) as r:
+                if r.status != 200:
+                    continue
+                data = await r.json()
+                fixtures = data.get("response", [])
+
+                for fix in fixtures:
+                    teams   = fix.get("teams", {})
+                    goals   = fix.get("goals", {})
+                    is_home = teams.get("home", {}).get("id") == team_id
+
+                    goals_for = goals.get("home" if is_home else "away") or 0
+                    goals_ag  = goals.get("away" if is_home else "home") or 0
+                    opponent  = (
+                        teams.get("away" if is_home else "home", {}).get("name", "?")
+                    )
+                    date_str  = fix.get("fixture", {}).get("date", "")[:10]
+
+                    if goals_for > goals_ag:
+                        result = "W"
+                    elif goals_for == goals_ag:
+                        result = "D"
+                    else:
+                        result = "L"
+
+                    try:
+                        db.execute("""
+                            INSERT OR IGNORE INTO team_history
+                            (team_id_ext, team_name, sport_key, opponent_name,
+                             match_date, is_home, goals_for, goals_against, result)
+                            VALUES (?,?,?,?,?,?,?,?,?)
+                        """, (str(team_id), team_name, sport_key, opponent,
+                              date_str, 1 if is_home else 0,
+                              goals_for, goals_ag, result))
+                        stored += db.execute("SELECT changes()").fetchone()[0]
+                    except Exception:
+                        pass
+
+                db.commit()
+                logger.info(
+                    f"✓ {team_name} saison {season}: {len(fixtures)} matchs stockés"
+                )
+        except Exception as e:
+            logger.error(f"fetch_team_history error {team_name} {season}: {e}")
+
+    db.close()
+    return stored
+
+
+def compute_stats_from_history(
+    team_name: str,
+    sport_key: str,
+    opponent_name: Optional[str] = None
+) -> dict:
+    """
+    Calcule les probabilités depuis l'historique stocké en BDD.
+    Retourne des stats précises basées sur 2 ans de données réelles.
+    """
+    db = get_db()
+
+    general = db.execute("""
+        SELECT
+            COUNT(*) as played,
+            SUM(result='W') as wins,
+            SUM(result='D') as draws,
+            SUM(result='L') as losses,
+            ROUND(AVG(goals_for), 2) as avg_goals_for,
+            ROUND(AVG(goals_against), 2) as avg_goals_against,
+            SUM(goals_for + goals_against > 2.5) as over_25,
+            SUM(goals_for > 0 AND goals_against > 0) as btts,
+            SUM(goals_against = 0) as clean_sheets
+        FROM team_history
+        WHERE team_name = ? AND sport_key = ?
+        AND match_date > date('now', '-2 years')
+    """, (team_name, sport_key)).fetchone()
+
+    home_stats = db.execute("""
+        SELECT
+            COUNT(*) as played,
+            SUM(result='W') as wins,
+            ROUND(AVG(goals_for), 2) as avg_goals_for,
+            ROUND(AVG(goals_against), 2) as avg_goals_against
+        FROM team_history
+        WHERE team_name = ? AND sport_key = ? AND is_home = 1
+        AND match_date > date('now', '-2 years')
+    """, (team_name, sport_key)).fetchone()
+
+    away_stats = db.execute("""
+        SELECT
+            COUNT(*) as played,
+            SUM(result='W') as wins,
+            ROUND(AVG(goals_for), 2) as avg_goals_for,
+            ROUND(AVG(goals_against), 2) as avg_goals_against
+        FROM team_history
+        WHERE team_name = ? AND sport_key = ? AND is_home = 0
+        AND match_date > date('now', '-2 years')
+    """, (team_name, sport_key)).fetchone()
+
+    recent = db.execute("""
+        SELECT result, goals_for, goals_against, opponent_name, match_date, is_home
+        FROM team_history
+        WHERE team_name = ? AND sport_key = ?
+        AND match_date > date('now', '-2 years')
+        ORDER BY match_date DESC LIMIT 5
+    """, (team_name, sport_key)).fetchall()
+
+    h2h_stats = {"played": 0, "wins": 0, "draws": 0, "losses": 0, "recent": []}
+    if opponent_name:
+        h2h = db.execute("""
+            SELECT result, goals_for, goals_against, match_date, is_home
+            FROM team_history
+            WHERE team_name = ? AND sport_key = ? AND opponent_name = ?
+            AND match_date > date('now', '-2 years')
+            ORDER BY match_date DESC LIMIT 10
+        """, (team_name, sport_key, opponent_name)).fetchall()
+
+        h2h_stats = {
+            "played": len(h2h),
+            "wins":   sum(1 for r in h2h if r["result"] == "W"),
+            "draws":  sum(1 for r in h2h if r["result"] == "D"),
+            "losses": sum(1 for r in h2h if r["result"] == "L"),
+            "recent": [
+                {
+                    "date":   r["match_date"],
+                    "home":   r["is_home"],
+                    "gf":     r["goals_for"],
+                    "ga":     r["goals_against"],
+                    "result": r["result"],
+                }
+                for r in h2h
+            ],
+        }
+
+    db.close()
+
+    g = dict(general) if general else {}
+    played = g.get("played") or 0
+    safe_played = played or 1
+
+    form_str = "".join(
+        r["result"].replace("W", "V").replace("D", "N").replace("L", "D")
+        for r in recent
+    ) if recent else "NNNNN"
+
+    home_dict = dict(home_stats) if home_stats else {}
+    away_dict = dict(away_stats) if away_stats else {}
+
     return {
-        "goals_for_avg":     float(goals_for.get("total") or 0),
-        "goals_against_avg": float(goals_ag.get("total") or 0),
-        "form_str":          form_str[-5:] if form_str else "",
-        "clean_sheets":      (resp.get("clean_sheet") or {}).get("total", 0),
+        "played":           played,
+        "wins":             g.get("wins") or 0,
+        "draws":            g.get("draws") or 0,
+        "losses":           g.get("losses") or 0,
+        "win_rate":         round((g.get("wins") or 0) / safe_played * 100, 1),
+        "avg_goals_for":    g.get("avg_goals_for") or 1.2,
+        "avg_goals_against":g.get("avg_goals_against") or 1.0,
+        "over_25_rate":     round((g.get("over_25") or 0) / safe_played * 100, 1),
+        "btts_rate":        round((g.get("btts") or 0) / safe_played * 100, 1),
+        "clean_sheet_rate": round((g.get("clean_sheets") or 0) / safe_played * 100, 1),
+        "form_str":         form_str,
+        "home": {
+            "played": home_dict.get("played") or 0,
+            "wins":   home_dict.get("wins") or 0,
+            "avg_gf": home_dict.get("avg_goals_for") or 1.2,
+            "avg_ga": home_dict.get("avg_goals_against") or 1.0,
+        },
+        "away": {
+            "played": away_dict.get("played") or 0,
+            "wins":   away_dict.get("wins") or 0,
+            "avg_gf": away_dict.get("avg_goals_for") or 1.0,
+            "avg_ga": away_dict.get("avg_goals_against") or 1.2,
+        },
+        "h2h":            h2h_stats,
+        "recent_matches": [dict(r) for r in recent],
+        "data_source":    "history_db",
     }
 
-async def _fetch_h2h(session: aiohttp.ClientSession, id_home: int, id_away: int) -> dict:
-    """5 derniers H2H entre deux équipes"""
-    data = await _afl_get(session, f"/fixtures?h2h={id_home}-{id_away}&last=5")
-    fixtures = data.get("response", [])
-    hw = dr = aw = 0
-    for f in fixtures:
-        goals = f.get("goals", {})
-        gh = goals.get("home", 0) or 0
-        ga = goals.get("away", 0) or 0
-        fix_home_id = f.get("teams", {}).get("home", {}).get("id")
-        if gh == ga:
-            dr += 1
-        elif gh > ga:
-            (hw if fix_home_id == id_home else aw)
-            if fix_home_id == id_home: hw += 1
-            else: aw += 1
-        else:
-            if fix_home_id == id_home: aw += 1
-            else: hw += 1
-    return {"home_wins": hw, "draws": dr, "away_wins": aw}
 
-async def fetch_match_stats(team_home: str, team_away: str, sport_key: str = "soccer_epl") -> dict:
+def poisson_probability(lam: float, k: int) -> float:
+    """P(X=k) avec une distribution de Poisson"""
+    import math
+    if lam <= 0:
+        return 1.0 if k == 0 else 0.0
+    return (math.exp(-lam) * (lam ** k)) / math.factorial(k)
+
+
+def compute_match_probabilities(
+    avg_goals_home: float,
+    avg_goals_away: float
+) -> dict:
     """
-    Récupère les vraies stats via API-Football (buts/match, forme, H2H).
-    Fallback vers _demo_stats() si la clé est absente ou si une erreur survient.
-    Résultat mis en cache 1h.
+    Calcule les probabilités de résultats via distribution de Poisson.
+    C'est la méthode utilisée par les bookmakers professionnels.
     """
-    ck = f"stats:{team_home}:{team_away}:{sport_key}"
+    max_goals = 8
+    prob_home_win = prob_draw = prob_away_win = 0.0
+    score_probs: Dict[str, float] = {}
+    total_goals_probs = [0.0] * (max_goals * 2 + 1)
+
+    for h in range(max_goals + 1):
+        for a in range(max_goals + 1):
+            p = poisson_probability(avg_goals_home, h) * poisson_probability(avg_goals_away, a)
+            score_probs[f"{h}-{a}"] = round(p * 100, 2)
+            if h > a:
+                prob_home_win += p
+            elif h == a:
+                prob_draw += p
+            else:
+                prob_away_win += p
+            total = h + a
+            if total <= max_goals * 2:
+                total_goals_probs[total] += p
+
+    top_scores = sorted(score_probs.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    over_15 = sum(p for g, p in enumerate(total_goals_probs) if g >= 2) * 100
+    over_25 = sum(p for g, p in enumerate(total_goals_probs) if g >= 3) * 100
+    over_35 = sum(p for g, p in enumerate(total_goals_probs) if g >= 4) * 100
+
+    btts_yes = sum(
+        poisson_probability(avg_goals_home, h) * poisson_probability(avg_goals_away, a)
+        for h in range(1, max_goals + 1)
+        for a in range(1, max_goals + 1)
+    ) * 100
+
+    return {
+        "home_win":   round(prob_home_win * 100, 1),
+        "draw":       round(prob_draw * 100, 1),
+        "away_win":   round(prob_away_win * 100, 1),
+        "over_15":    round(over_15, 1),
+        "over_25":    round(over_25, 1),
+        "over_35":    round(over_35, 1),
+        "btts_yes":   round(btts_yes, 1),
+        "btts_no":    round(100 - btts_yes, 1),
+        "top_scores": [{"score": s, "prob": p} for s, p in top_scores],
+    }
+
+
+async def fetch_match_stats(
+    team_home: str,
+    team_away: str,
+    sport_key: str = "soccer_epl"
+) -> dict:
+    """
+    Pipeline de stats :
+    1. Cherche l'historique en BDD (rapide, 0 req API)
+    2. Si absent → fetch via api-sports.io et stocke
+    3. Calcule les probabilités Poisson
+    4. Fallback démo si tout échoue
+    """
+    ck = f"stats2:{team_home}:{team_away}:{sport_key}"
     cached = cache_get(ck)
     if cached:
         return cached
 
-    if not API_FOOTBALL_KEY:
-        logger.debug(f"API_FOOTBALL_KEY absente — stats démo pour {team_home} vs {team_away}")
-        return _demo_stats(team_home, team_away)
-
     league_id = AFL_LEAGUE_IDS.get(sport_key, 39)
     season    = 2024
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            id_home, id_away = await asyncio.gather(
-                _search_team_id(session, team_home, league_id, season),
-                _search_team_id(session, team_away, league_id, season),
-            )
+    db = get_db()
+    home_count = db.execute(
+        "SELECT COUNT(*) FROM team_history WHERE team_name=? AND sport_key=?",
+        (team_home, sport_key)
+    ).fetchone()[0]
+    away_count = db.execute(
+        "SELECT COUNT(*) FROM team_history WHERE team_name=? AND sport_key=?",
+        (team_away, sport_key)
+    ).fetchone()[0]
+    db.close()
 
-            if not id_home or not id_away:
-                logger.warning(f"IDs introuvables: {team_home}({id_home}) vs {team_away}({id_away})")
-                return _demo_stats(team_home, team_away)
+    if (home_count < 5 or away_count < 5) and API_FOOTBALL_KEY:
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {"x-apisports-key": API_FOOTBALL_KEY}
 
-            stats_home, stats_away, h2h = await asyncio.gather(
-                _fetch_season_stats(session, id_home, league_id, season),
-                _fetch_season_stats(session, id_away, league_id, season),
-                _fetch_h2h(session, id_home, id_away),
-            )
+                async def find_team_id(name: str) -> Optional[int]:
+                    url = (
+                        f"https://v3.football.api-sports.io/teams"
+                        f"?search={name}&league={league_id}&season={season}"
+                    )
+                    try:
+                        async with session.get(
+                            url, headers=headers,
+                            timeout=aiohttp.ClientTimeout(total=8)
+                        ) as r:
+                            if r.status != 200:
+                                return None
+                            data = await r.json()
+                            resp = data.get("response", [])
+                            if resp:
+                                team_id = resp[0]["team"]["id"]
+                                db2 = get_db()
+                                db2.execute(
+                                    "INSERT OR REPLACE INTO team_ids VALUES (?,?,?,'api_football')",
+                                    (name, sport_key, str(team_id))
+                                )
+                                db2.commit(); db2.close()
+                                return team_id
+                            return None
+                    except Exception as e:
+                        logger.error(f"find_team_id error {name}: {e}")
+                        return None
 
-        def _convert_form(s: str) -> str:
-            return s.replace("W", "V").replace("L", "D").replace("D", "N")
+                id_home, id_away = await asyncio.gather(
+                    find_team_id(team_home),
+                    find_team_id(team_away),
+                )
 
-        result = {
-            "xg_home":            round(stats_home.get("goals_for_avg", 1.2), 1),
-            "xg_away":            round(stats_away.get("goals_for_avg", 1.0), 1),
-            "form_home":          _convert_form(stats_home.get("form_str", "")) or "NNNNN",
-            "form_away":          _convert_form(stats_away.get("form_str", "")) or "NNNNN",
-            "h2h_home_wins":      h2h.get("home_wins", 0),
-            "h2h_away_wins":      h2h.get("away_wins", 0),
-            "h2h_draws":          h2h.get("draws", 0),
-            "goals_against_home": round(stats_home.get("goals_against_avg", 1.0), 1),
-            "goals_against_away": round(stats_away.get("goals_against_avg", 1.0), 1),
-            "clean_sheets_home":  stats_home.get("clean_sheets", 0),
-            "clean_sheets_away":  stats_away.get("clean_sheets", 0),
-            "data_source":        "api_football",
-        }
+                if id_home and home_count < 5:
+                    await fetch_and_store_team_history(
+                        session, id_home, team_home, league_id, sport_key
+                    )
+                if id_away and away_count < 5:
+                    await fetch_and_store_team_history(
+                        session, id_away, team_away, league_id, sport_key
+                    )
+        except Exception as e:
+            logger.error(f"History fetch failed: {e}")
 
-        cache_set(ck, result, 3600)
-        logger.info(f"✓ Stats API-Football: {team_home} vs {team_away}")
-        return result
+    stats_home = compute_stats_from_history(team_home, sport_key, team_away)
+    stats_away = compute_stats_from_history(team_away, sport_key, team_home)
 
-    except Exception as e:
-        logger.error(f"fetch_match_stats failed: {e}")
-        return _demo_stats(team_home, team_away)
+    probs = compute_match_probabilities(
+        stats_home["avg_goals_for"],
+        stats_away["avg_goals_for"],
+    )
+
+    has_real_data = stats_home["played"] > 5 and stats_away["played"] > 5
+
+    if not has_real_data:
+        demo = _demo_stats(team_home, team_away)
+        stats_home["avg_goals_for"]    = demo["xg_home"]
+        stats_home["form_str"]         = demo["form_home"]
+        stats_away["avg_goals_for"]    = demo["xg_away"]
+        stats_away["form_str"]         = demo["form_away"]
+        stats_home["h2h"]["wins"]      = demo["h2h_home_wins"]
+        stats_home["h2h"]["losses"]    = demo["h2h_away_wins"]
+        stats_home["h2h"]["draws"]     = demo["h2h_draws"]
+        probs = compute_match_probabilities(demo["xg_home"], demo["xg_away"])
+
+    result = {
+        "xg_home":             stats_home["avg_goals_for"],
+        "xg_away":             stats_away["avg_goals_for"],
+        "form_home":           stats_home["form_str"],
+        "form_away":           stats_away["form_str"],
+        "h2h_home_wins":       stats_home["h2h"].get("wins", 0),
+        "h2h_away_wins":       stats_home["h2h"].get("losses", 0),
+        "h2h_draws":           stats_home["h2h"].get("draws", 0),
+        "h2h_recent":          stats_home["h2h"].get("recent", []),
+        "goals_against_home":  stats_home["avg_goals_against"],
+        "goals_against_away":  stats_away["avg_goals_against"],
+        "clean_sheets_home":   stats_home.get("clean_sheet_rate", 0),
+        "clean_sheets_away":   stats_away.get("clean_sheet_rate", 0),
+        "stats_home":          stats_home,
+        "stats_away":          stats_away,
+        "probabilities":       probs,
+        "data_source":         "history_db" if has_real_data else "demo",
+    }
+
+    cache_set(ck, result, 1800)
+    logger.info(
+        f"✓ Stats [{result['data_source']}] "
+        f"{team_home}(played:{stats_home['played']}) vs "
+        f"{team_away}(played:{stats_away['played']})"
+    )
+    return result
 
 def _build_analysis_prompt(match: dict, stats: dict) -> str:
     vbs       = match.get("value_bets", [])
@@ -966,6 +1462,25 @@ def _build_analysis_prompt(match: dict, stats: dict) -> str:
             for v in lst[:3]
         ) if lst else "  Aucun"
 
+    probs    = stats.get("probabilities", {}) or {}
+    stats_h  = stats.get("stats_home", {}) or {}
+    stats_a  = stats.get("stats_away", {}) or {}
+    home_h   = stats_h.get("home", {}) or {}
+    away_a   = stats_a.get("away", {}) or {}
+    h2h_rec  = stats.get("h2h_recent", []) or []
+
+    top_scores_str = ", ".join(
+        f"{s['score']} ({s['prob']}%)" for s in probs.get("top_scores", [])[:5]
+    ) or "N/A"
+
+    h2h_recent_lines = "\n".join(
+        f"    - {r.get('date', '?')} : "
+        f"{'dom' if r.get('home') else 'ext'} | "
+        f"{r.get('gf', 0)}-{r.get('ga', 0)} | "
+        f"{r.get('result', '?')}"
+        for r in h2h_rec[:5]
+    ) or "    Aucun historique disponible"
+
     return f"""Tu es RockAI, un expert en value betting utilisant la méthode Pinnacle.
 
 MATCH : {match['team_home']} vs {match['team_away']}
@@ -977,13 +1492,42 @@ COTES PINNACLE (fair odds du marché) :
   • Nul : {match.get('odds_draw', 'N/A')}
   • {match['team_away']} : {match.get('odds_away', 'N/A')}
 
-STATISTIQUES PRÉ-MATCH ({stats.get('data_source', 'demo')}) :
-  • Buts marqués/match {match['team_home']} : {stats['xg_home']} | encaissés : {stats.get('goals_against_home', '?')}
-  • Buts marqués/match {match['team_away']} : {stats['xg_away']} | encaissés : {stats.get('goals_against_away', '?')}
-  • Clean sheets {match['team_home']} : {stats.get('clean_sheets_home', '?')} | {match['team_away']} : {stats.get('clean_sheets_away', '?')}
-  • Forme {match['team_home']} (récent→ancien) : {stats['form_home']} (V=victoire D=défaite N=nul)
-  • Forme {match['team_away']} (récent→ancien) : {stats['form_away']}
-  • H2H 5 derniers matchs : {stats['h2h_home_wins']}V / {stats['h2h_draws']}N / {stats['h2h_away_wins']}D pour {match['team_home']}
+PROBABILITÉS POISSON (calculées depuis 2 ans d'historique) :
+  • Victoire {match['team_home']} : {probs.get('home_win', '?')}%
+  • Nul : {probs.get('draw', '?')}%
+  • Victoire {match['team_away']} : {probs.get('away_win', '?')}%
+  • Over 1.5 buts : {probs.get('over_15', '?')}%
+  • Over 2.5 buts : {probs.get('over_25', '?')}%
+  • Over 3.5 buts : {probs.get('over_35', '?')}%
+  • BTTS Oui : {probs.get('btts_yes', '?')}% | Non : {probs.get('btts_no', '?')}%
+  • Top scores probables : {top_scores_str}
+
+STATISTIQUES {match['team_home']} (2 ans, {stats_h.get('played', 0)} matchs) :
+  • V/N/D : {stats_h.get('wins', 0)}/{stats_h.get('draws', 0)}/{stats_h.get('losses', 0)}
+  • Taux de victoire : {stats_h.get('win_rate', 0)}%
+  • Buts marqués/match : {stats_h.get('avg_goals_for', '?')}
+  • Buts encaissés/match : {stats_h.get('avg_goals_against', '?')}
+  • Over 2.5 rate : {stats_h.get('over_25_rate', 0)}%
+  • BTTS rate : {stats_h.get('btts_rate', 0)}%
+  • Clean sheets : {stats_h.get('clean_sheet_rate', 0)}%
+  • À domicile : {home_h.get('wins', 0)}V sur {home_h.get('played', 0)} matchs
+  • Forme récente (5) : {stats.get('form_home', '?')} (V=victoire D=défaite N=nul)
+
+STATISTIQUES {match['team_away']} (2 ans, {stats_a.get('played', 0)} matchs) :
+  • V/N/D : {stats_a.get('wins', 0)}/{stats_a.get('draws', 0)}/{stats_a.get('losses', 0)}
+  • Taux de victoire : {stats_a.get('win_rate', 0)}%
+  • Buts marqués/match : {stats_a.get('avg_goals_for', '?')}
+  • Buts encaissés/match : {stats_a.get('avg_goals_against', '?')}
+  • Over 2.5 rate : {stats_a.get('over_25_rate', 0)}%
+  • BTTS rate : {stats_a.get('btts_rate', 0)}%
+  • Clean sheets : {stats_a.get('clean_sheet_rate', 0)}%
+  • À l'extérieur : {away_a.get('wins', 0)}V sur {away_a.get('played', 0)} matchs
+  • Forme récente (5) : {stats.get('form_away', '?')}
+
+H2H (2 ans) :
+  {match['team_home']} gagne : {stats.get('h2h_home_wins', 0)} | Nuls : {stats.get('h2h_draws', 0)} | {match['team_away']} gagne : {stats.get('h2h_away_wins', 0)}
+  Dernières confrontations :
+{h2h_recent_lines}
 
 VALUE BETS 1X2 ({len(vbs_h2h)}) :
 {fmt_vbs(vbs_h2h)}
@@ -999,7 +1543,7 @@ Réponds UNIQUEMENT avec un objet JSON valide (pas de markdown, pas de texte hor
   "recommendation": "La meilleure value bet toutes catégories confondues (1X2, Over/Under, BTTS)",
   "confidence": 75,
   "risk_level": "modéré",
-  "reasoning": "2-3 phrases d'analyse factuelle en français",
+  "reasoning": "2-3 phrases d'analyse factuelle en français basée sur les probabilités Poisson et l'historique",
   "factors": ["facteur clé 1", "facteur clé 2", "facteur clé 3"]
 }}
 confidence : 0-100. risk_level : "faible", "modéré" ou "élevé"."""
@@ -1202,10 +1746,14 @@ async def analyse_match(match_id: str, user=Depends(get_user)):
         "h2h_home_wins":      stats["h2h_home_wins"],
         "h2h_away_wins":      stats["h2h_away_wins"],
         "h2h_draws":          stats["h2h_draws"],
+        "h2h_recent":         stats.get("h2h_recent", []),
         "goals_against_home": stats.get("goals_against_home"),
         "goals_against_away": stats.get("goals_against_away"),
         "clean_sheets_home":  stats.get("clean_sheets_home"),
         "clean_sheets_away":  stats.get("clean_sheets_away"),
+        "probabilities":      stats.get("probabilities", {}),
+        "stats_home":         stats.get("stats_home", {}),
+        "stats_away":         stats.get("stats_away", {}),
         "data_source":        stats["data_source"],
         "stats_source":       stats.get("data_source", "demo"),
         "best_bet_label":     match.get("best_bet_label"),

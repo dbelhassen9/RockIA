@@ -20,6 +20,42 @@
   --text:          #e8edf2;
   --text-muted:    #4a5568;
   --text-dim:      #8892a4;
+  --success:       #00d4dc;
+  --warning:       #ffd700;
+  --danger:        #ff4757;
+}
+
+.card-vs {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+.card-vs:hover { border-color: var(--border-accent); }
+
+.bar-track {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface2);
+  overflow: hidden;
+}
+.bar-fill-left {
+  position: absolute; top: 0; right: 50%; height: 100%;
+  background: var(--accent);
+  transition: width 0.6s ease;
+}
+.bar-fill-right {
+  position: absolute; top: 0; left: 50%; height: 100%;
+  background: var(--accent);
+  opacity: 0.7;
+  transition: width 0.6s ease;
+}
+.bar-fill-progress {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), rgba(0,210,220,0.6));
+  transition: width 0.6s ease;
+  box-shadow: 0 0 8px var(--accent-glow);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
